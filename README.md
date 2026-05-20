@@ -13,9 +13,10 @@ Kerbals eat `Food` and drink `Water`, producing `Waste` and `WasteWater`. There 
 ### Oxygen and CarbonDioxide
 Kerbals breath `Oxygen` and then exhale `CarbonDioxide`. Unlike other life support mods, `CarbonDioxide` isn't stored in a tank; it builds up in the cabin air. In zero-G, it can form "bubbles" and needs to be stirred throughout the cabin. A cabin fan (part of the `Climate Control` system) keeps the air circulating to prevent CO2 from collecting in one spot. 
 #### CO2 Scrubber
-To eliminate `CarbonDioxide`, a Command Pod is equipped with a Lithium Hydroxide Scrubber, which pulls the cabin air through a LiOH canister using a fan.
-
-The scrubber removes CO2 from the cabin, generating heat. LiOH is provided by a canister. One `LiOH Scrubber Canister` gives enough LiOH for about 9 hours per Kerbal -- 4.5 hours for two Kerbals, and 3 hours for three Kerbals. That means you need to bring extras if you're having a long mission. Store them in your Command Pod's inventory (they won't be pulled from a Kerbal's inventory). When the cabin runs out of LiOH, you can reload the scrubber if you have a canister onboard. The old canister's volume is converted to Waste stored in the Command Pod's waste tank. As LiOH gets used, it also becomes waste. The scrubber is EC-dependent and will only work if there's power to run the fan.
+To eliminate `CarbonDioxide`, a Command Pod is equipped with either a Lithium Hydroxide Scrubber or a CDRA (Carbon Dioxide Removal Assembly).
+-The Lithium Hydroxide Scrubber pulls the cabin air through a LiOH canister using a fan, using a little bit of EC and generating a lot of heat. LiOH is provided by a canister. One `LiOH Scrubber Canister` gives enough LiOH for about 9 hours per Kerbal -- 4.5 hours for two Kerbals, and 3 hours for three Kerbals. That means you need to bring extras if you're having a long mission. Store them in your Command Pod's inventory (they won't be pulled from a Kerbal's inventory). When the cabin runs out of LiOH, you can reload the scrubber if you have a canister onboard. The old canister's volume is converted to Waste stored in the Command Pod's waste tank. As LiOH gets used, it also becomes waste. The scrubber is EC-dependent and will only work if there's power to run the fan.
+-The CDRA pulls cabin air through a pair of beds that collect CO2, then the beds have to be heated to release the CO2 and send it overboard (or to a tank if you plan to collect it). The CDRA uses a lot of power but generates less heat.
+***The CDRA is new, and a bug fix adjusted some of the thermal generation for LiOH scrubbers. The existing settings for EC consumption and heat generation are very untested and potentially unbalanced. If you have any problems, please let me know.***
 ### Temperature Control
 Space is cold, and without something generating heat, the cabin temperature can drop dangerously low. Luckily, a spacecraft is just chock full of heat sources. For one, Kerbals themselves generate body heat. The CO2 scrubber also generates heat when it's in use. Command Pod electronics also generate heat, such as the avionics package, the SAS and RCS computers, and even the environmental control system itself. A cabin heater is used in combination with a thermostat to keep the cabin at a comfortable 22 degrees Celsius. If the temperature climbs dangerously high, radiators can be automatically deployed.
 ### ElectricCharge and Electronics
@@ -48,7 +49,7 @@ SAS and RCS also have independent electronics that are on when they are enabled 
 - None
 ## Roadmap & Upcoming Features
 - UI for background processing
-- Carbon Dioxide Removal Assembly (CDRA) - Instead of only using a LiOH scrubber, the CDRA will extract CO2 to allow for storage (or dumping overboard).
+- ~~Carbon Dioxide Removal Assembly (CDRA) - Instead of only using a LiOH scrubber, the CDRA will extract CO2 to allow for storage (or dumping overboard).~~ (DONE)
 - Pressurization system
 - Humidity from exhalation and the LiOH scrubber
 - Radiation belt and solar radiation

@@ -32,6 +32,10 @@ namespace KickLifeSupport
         internal const double airPerSeat = 2000;
 
         #region Module Fields
+        [KSPField(isPersistant = true, guiActiveEditor = true, guiName = "Scrubber Type", groupName = "KICKLS", groupDisplayName = "Life Support")]
+        [UI_Toggle(disabledText = "LiOH", enabledText = "CDRA")]
+        public bool isCDRA = false;
+
         [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Status", groupName = "KICKLS", groupDisplayName = "Life Support")]
         public string lsStatus = "Nominal";
 
@@ -63,6 +67,23 @@ namespace KickLifeSupport
                     cabinTemp = (float)(KToC(part.temperature));
                 }
             }
+
+            if (isCDRA)
+            {
+                Events["ReloadScrubber"].active = false;
+                Events["ReloadScrubber"].guiActive = false;
+                SetLiOHResource(false);
+            }
+
+            if (HighLogic.LoadedSceneIsEditor)
+            {
+                Fields["isCDRA"].uiControlEditor.onFieldChanged += (f, o) =>
+                {
+                    SetLiOHResource(!isCDRA);
+                    Events["ReloadScrubber"].active = !isCDRA;
+                    Events["ReloadScrubber"].guiActive = !isCDRA;
+                };
+            }
         }
 
         public void FixedUpdate()
@@ -75,7 +96,7 @@ namespace KickLifeSupport
             else
                 return;
 
-                if (cabinTemp == 0 || cabinTemp < -200)
+            if (cabinTemp == 0 || cabinTemp < -200)
             {
                 cabinTemp = (float)(KToC(part.temperature));
             }
@@ -177,9 +198,19 @@ namespace KickLifeSupport
             }
 
             // Scrubber
-            if (data.lastScrubAmount > 0)
+            if (isCDRA)
             {
-                totalFlux += (data.lastScrubAmount * liohReactionHeatPerUnit);
+                if (data.lastCDRAScrubAmount > 0)
+                {
+                    totalFlux += (data.lastCDRAScrubAmount / data.activeCDRAScrubberCount) * cdraHeatPerUnit;
+                }
+            }
+            else
+            {
+                if (data.lastLiOHScrubAmount > 0)
+                {
+                    totalFlux += (data.lastLiOHScrubAmount / data.activeLiOHScrubberCount) * liohReactionHeatPerUnit;
+                }
             }
 
             if (gameSettings.useCabinTempSystem)
@@ -202,6 +233,27 @@ namespace KickLifeSupport
         }
 
         #region Scrubber Handling
+
+        void SetLiOHResource(bool enabled)
+        {
+            if (liohId == -1) return;
+            PartResource lioh = part.Resources.Get(liohId);
+            if (lioh == null) return;
+
+            if (enabled)
+            {
+                PartResource prefab = part.partInfo?.partPrefab?.Resources.Get(liohId);
+                double restore = prefab != null ? prefab.maxAmount : 0.5;
+                lioh.maxAmount = restore;
+                lioh.amount = restore;
+            }
+            else
+            {
+                lioh.amount = 0;
+                lioh.maxAmount = 0;
+            }
+        }
+
         /// <summary>
         /// Allows the user to replace the lithium hydroxide canister
         /// </summary>

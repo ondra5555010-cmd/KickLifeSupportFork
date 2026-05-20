@@ -63,6 +63,7 @@ namespace KickLifeSupport
         /// Based on 21.4 kcal per mole of CO2 absorbed
         /// </summary>
         internal const double liohReactionHeatPerUnit = 4.0;
+        internal const double cdraHeatPerUnit = 1.5;
         internal const double airSpecificHeat = 1005.0;
         internal const double airDensity = 0.001225;
         internal const double wallCoupling = 0.003;

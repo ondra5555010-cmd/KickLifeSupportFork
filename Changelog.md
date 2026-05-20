@@ -1,4 +1,10 @@
 # Changelog
+## (v0.1.3) 5/20/2026
+### Bug Fixes
+- by @averageksp -- Updated the URL in KickLifeSupport.version to use the correct repository and branch path. (else it won't work properly)
+- Fixed a bug where scrubber heat was multiplied by the number of active scrubbers on the vessel instead of being divided proportionally per module
+### Changes
+- Added CDRA scrubbers
 ## (v0.1.2) 1/3/2026
 ### Changes
 - Happy New Year

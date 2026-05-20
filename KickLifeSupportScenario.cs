@@ -54,6 +54,7 @@ namespace KickLifeSupport
         float wasteRequestRate;
         float wasteWaterRequestRate;
         float lithiumHydroxideRequestRate;
+        float cdraECRequestRate;
 
         // EC Rates
         float scrubberECRequestRate;
@@ -312,6 +313,7 @@ namespace KickLifeSupport
             wasteWaterRequestRate = GetValue(settings, "WASTEWATER_RATE");
             lithiumHydroxideRequestRate = GetValue(settings, "LITHIUMHYDROXIDE_RATE");
             scrubberECRequestRate = GetValue(settings, "SCRUBBER_EC_RATE");
+            cdraECRequestRate = GetValue(settings, "CDRA_EC_RATE");
 
             graceO2 = GetValue(settings, "GRACE_OXYGEN");
             graceFood = GetValue(settings, "GRACE_FOOD");
@@ -431,12 +433,17 @@ namespace KickLifeSupport
         /// <remarks>This whole method needs a rewrite, but a good one.</remarks>
         void RunScrubber(Vessel v, LifeSupportStatus status, double deltaTime, int totalCrewOnShip)
         {
-            double totalCO2Removed = 0;
+            double totalCDRARemoved = 0;
+            double totalLiOHRemoved = 0;
+
+            int activeCDRACount = 0;
+            int activeLiOHCount = 0;
 
             // Rates per seat
             double baseScrubRate = scrubberRequestRate * deltaTime;
             double baseEcRate = scrubberECRequestRate * deltaTime;
             double baseLiohRate = lithiumHydroxideRequestRate * deltaTime;
+            double baseCdraEcRate = cdraECRequestRate * deltaTime;
 
             if (v.loaded)
             {
@@ -454,7 +461,10 @@ namespace KickLifeSupport
                     int partCapacity = m.part.CrewCapacity;
                     if (partCapacity == 0) partCapacity = 1;
 
-                    double ecReq = baseEcRate * partCapacity;
+                    double ecReq = m.isCDRA ?
+                        baseCdraEcRate * partCapacity :
+                        baseEcRate * partCapacity;
+
                     (double amountConsumed, double ratio) ecRes = ConsumeResource(v, electricChargeId, ecReq);
 
                     if (ecRes.ratio < 0.99)
@@ -463,18 +473,30 @@ namespace KickLifeSupport
                         continue;
                     }
 
-                    double liohReq = baseLiohRate * partCapacity;
-                    double liohTaken = m.part.RequestResource(lithiumHydroxideId, liohReq);
-
-                    if (liohTaken < liohReq - epsilon)
+                    if (m.isCDRA)
                     {
-                        m.scrubberStatus = "No LiOH";
+                        double scrubAmount = baseScrubRate * partCapacity;
+                        totalCDRARemoved += scrubAmount;
+                        ProduceResource(v, co2Id, scrubAmount);
+                        m.scrubberStatus = "Active";
+                        activeCDRACount++;
                     }
                     else
                     {
-                        m.part.RequestResource(wasteId, -liohTaken);
-                        totalCO2Removed += (baseScrubRate * partCapacity);
-                        m.scrubberStatus = "Active";
+                        double liohReq = baseLiohRate * partCapacity;
+                        double liohTaken = m.part.RequestResource(lithiumHydroxideId, liohReq);
+
+                        if (liohTaken < liohReq - epsilon)
+                        {
+                            m.scrubberStatus = "No LiOH";
+                        }
+                        else
+                        {
+                            m.part.RequestResource(wasteId, -liohTaken);
+                            totalLiOHRemoved += (baseScrubRate * partCapacity);
+                            m.scrubberStatus = "Active";
+                            activeLiOHCount++;
+                        }
                     }
                 }
             }
@@ -483,6 +505,7 @@ namespace KickLifeSupport
                 foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
                 {
                     bool isScrubberOn = false;
+                    bool isCDRA = false;
                     foreach (ProtoPartModuleSnapshot m in p.modules)
                     {
                         if (m.moduleName == "KickLifeSupportModule")
@@ -490,7 +513,10 @@ namespace KickLifeSupport
                             if (bool.TryParse(m.moduleValues.GetValue("scrubberEnabled"), out bool val) && val)
                             {
                                 isScrubberOn = true;
-                                break;
+                            }
+                            if (bool.TryParse(m.moduleValues.GetValue("isCDRA"), out bool val2) && val2)
+                            {
+                                isCDRA = val2;
                             }
                         }
                     }
@@ -502,76 +528,95 @@ namespace KickLifeSupport
                         partCapacity = p.partInfo.partPrefab.CrewCapacity;
                     if (partCapacity == 0) partCapacity = 1;
 
-                    double ecReq = baseEcRate * partCapacity;
+                    double ecReq = isCDRA ? 
+                        baseCdraEcRate * partCapacity :
+                        baseEcRate * partCapacity;
                     (double amountConsumed, double ratio) ecRes = ConsumeResource(v, electricChargeId, ecReq);
                     if (ecRes.ratio < 0.99) continue;
 
-                    double liohReq = baseLiohRate * partCapacity;
-                    double liohTaken = 0;
-
-                    foreach (ProtoPartResourceSnapshot r in p.resources)
+                    if (isCDRA)
                     {
-                        if (r.definition.id == lithiumHydroxideId)
+                        double scrubAmount = baseScrubRate * partCapacity;
+                        
+                        totalCDRARemoved += (baseScrubRate * partCapacity);
+                        ProduceResource(v, co2Id, scrubAmount);
+                        activeCDRACount++;
+                    }
+                    else
+                    {
+                        double liohReq = baseLiohRate * partCapacity;
+                        double liohTaken = 0;
+
+                        foreach (ProtoPartResourceSnapshot r in p.resources)
                         {
-                            if (r.amount >= liohReq)
+                            if (r.definition.id == lithiumHydroxideId)
                             {
-                                r.amount -= liohReq;
-                                liohTaken = liohReq;
-                            }
-                            else
-                            {
-                                if (TryReloadScrubberUnloaded(v, p))
+                                if (r.amount >= liohReq)
                                 {
-                                    if (r.amount >= liohReq)
+                                    r.amount -= liohReq;
+                                    liohTaken = liohReq;
+                                }
+                                else
+                                {
+                                    if (TryReloadScrubberUnloaded(v, p))
                                     {
-                                        r.amount -= liohReq;
-                                        liohTaken = liohReq;
+                                        if (r.amount >= liohReq)
+                                        {
+                                            r.amount -= liohReq;
+                                            liohTaken = liohReq;
+                                        }
+                                        else
+                                        {
+                                            // For safety
+                                            liohTaken = r.amount;
+                                            r.amount = 0;
+                                        }
                                     }
                                     else
                                     {
-                                        // For safety
+                                        // Cartridge reload failed
                                         liohTaken = r.amount;
                                         r.amount = 0;
                                     }
                                 }
-                                else
+                                break;
+                            }
+                        }
+
+                        if (liohTaken >= liohReq - epsilon)
+                        {
+                            double wasteToAdd = liohTaken;
+                            foreach (ProtoPartResourceSnapshot r in p.resources)
+                            {
+                                if (r.definition.id == wasteId)
                                 {
-                                    // Cartridge reload failed
-                                    liohTaken = r.amount;
-                                    r.amount = 0;
+                                    double space = r.maxAmount - r.amount;
+                                    if (space >= wasteToAdd)
+                                    {
+                                        r.amount += wasteToAdd;
+                                        wasteToAdd = 0;
+                                    }
+                                    else
+                                    {
+                                        r.amount = r.maxAmount;
+                                        wasteToAdd -= space;
+                                    }
                                 }
                             }
-                            break;
+                            totalLiOHRemoved += (baseScrubRate * partCapacity);
+                            activeLiOHCount++;
                         }
                     }
 
-                    if (liohTaken >= liohReq - epsilon)
-                    {
-                        double wasteToAdd = liohTaken;
-                        foreach (ProtoPartResourceSnapshot r in p.resources)
-                        {
-                            if (r.definition.id == wasteId)
-                            {
-                                double space = r.maxAmount - r.amount;
-                                if (space >= wasteToAdd)
-                                {
-                                    r.amount += wasteToAdd;
-                                    wasteToAdd = 0;
-                                }
-                                else
-                                {
-                                    r.amount = r.maxAmount;
-                                    wasteToAdd -= space;
-                                }
-                            }
-                        }
-                        totalCO2Removed += (baseScrubRate * partCapacity);
-                    }
+                    
                 }
             }
 
-            status.cabinCO2 -= (float)totalCO2Removed;
-            status.lastScrubAmount = totalCO2Removed;
+            status.cabinCO2 -= (float)(totalCDRARemoved + totalLiOHRemoved);
+            status.lastCDRAScrubAmount = totalCDRARemoved;
+            status.lastLiOHScrubAmount = totalLiOHRemoved;
+            status.activeCDRAScrubberCount = activeCDRACount;
+            status.activeLiOHScrubberCount = activeLiOHCount;
             if (status.cabinCO2 < 0) status.cabinCO2 = 0;
         }
 

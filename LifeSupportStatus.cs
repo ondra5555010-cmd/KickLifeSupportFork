@@ -33,7 +33,10 @@ namespace KickLifeSupport
 
         public double lastUpdateTime = 0;
 
-        public double lastScrubAmount = 0;
+        public double lastCDRAScrubAmount = 0f;
+        public double lastLiOHScrubAmount = 0f;
+        public int activeCDRAScrubberCount = 0;
+        public int activeLiOHScrubberCount = 0;
 
         public void Save(ConfigNode node)
         {
