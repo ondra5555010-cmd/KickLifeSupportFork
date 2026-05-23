@@ -24,6 +24,7 @@ namespace KickLifeSupport
         int wasteId = -1;
         int liohId = -1;
         int ecId = -1;
+        int o2Id = -1;
         #endregion
 
         /// <summary>
@@ -42,6 +43,10 @@ namespace KickLifeSupport
         [KSPField(guiActive = true, guiActiveEditor = false, guiName = "CO2 Level", groupName = "KICKLS", groupDisplayName = "Life Support", guiFormat = "P1")]
         public float co2Level = 0f;
 
+        //[KSPField(isPersistant = true, guiActive = true, guiActiveEditor = false, guiName = "Cabin Pressure", groupName = "KICKLS", groupDisplayName = "Life Support", guiFormat = "F1", guiUnits = " kPa")]
+        public float cabinPressure = 101.325f;  // pressure in kPa
+        // TODO: Implement cabin pressure simulation
+
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Scrubber", groupName = "KICKLS", groupDisplayName = "Life Support"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool scrubberEnabled = true;
 
@@ -59,6 +64,8 @@ namespace KickLifeSupport
             if (liohDef != null) liohId = liohDef.id;
             PartResourceDefinition ecDef = PartResourceLibrary.Instance.GetDefinition("ElectricCharge");
             if (ecDef != null) ecId = ecDef.id;
+            PartResourceDefinition o2Def = PartResourceLibrary.Instance.GetDefinition("Oxygen");
+            if (o2Def != null) o2Id = o2Def.id;
 
             if (HighLogic.LoadedSceneIsFlight)
             {
@@ -200,16 +207,16 @@ namespace KickLifeSupport
             // Scrubber
             if (isCDRA)
             {
-                if (data.lastCDRAScrubAmount > 0)
+                if (data.lastCDRAScrubAmount > 0 && dt > 0)
                 {
-                    totalFlux += (data.lastCDRAScrubAmount / data.activeCDRAScrubberCount) * cdraHeatPerUnit;
+                    totalFlux += (data.lastCDRAScrubAmount / data.activeCDRAScrubberCount / dt) * cdraHeatPerUnit;
                 }
             }
             else
             {
-                if (data.lastLiOHScrubAmount > 0)
+                if (data.lastLiOHScrubAmount > 0 && dt > 0)
                 {
-                    totalFlux += (data.lastLiOHScrubAmount / data.activeLiOHScrubberCount) * liohReactionHeatPerUnit;
+                    totalFlux += (data.lastLiOHScrubAmount / data.activeLiOHScrubberCount / dt) * liohReactionHeatPerUnit;
                 }
             }
 
@@ -230,6 +237,10 @@ namespace KickLifeSupport
             cabinCO2 = data.cabinCO2;
             co2Level = (float)(cabinCO2 / (vessel.GetCrewCapacity() * airPerSeat));
             heatFlux = (float)totalFlux;
+
+            Events["EqualizeAtmosphere"].active = vessel.atmDensity > 0
+                                               && vessel.mainBody.atmosphereContainsOxygen
+                                               && VesselHasIntakeAir();
         }
 
         #region Scrubber Handling
@@ -357,6 +368,49 @@ namespace KickLifeSupport
             if (cmd.hibernation) return false;
 
             return true;
+        }
+        #endregion
+
+        #region Cabin Pressure Relief Valve
+        [KSPEvent(guiActive = true, guiName = "Cabin Pressure Relief Valve", groupName = "KICKLS", groupDisplayName = "Life Support")]
+        public void EqualizeAtmosphere()
+        {
+            foreach (Part p in vessel.parts)
+            {
+                foreach (PartResource r in p.Resources)
+                {
+                    if (r.info.id == o2Id) r.amount = r.maxAmount;
+                }
+            }
+
+            if (KickLifeSupportScenario.Instance != null)
+            {
+                LifeSupportStatus data = KickLifeSupportScenario.Instance.GetData(vessel.id);
+                data.cabinCO2 = 0;
+            }
+            foreach (KickLifeSupportModule m in vessel.FindPartModulesImplementing<KickLifeSupportModule>())
+            {
+                m.cabinCO2 = 0;
+            }
+
+            cabinTemp = (float)KToC(vessel.externalTemperature);
+            cabinPressure = (float)vessel.staticPressurekPa;
+            ScreenMessages.PostScreenMessage("Cabin Air Equalized", 3f, ScreenMessageStyle.UPPER_CENTER);
+        }
+
+        bool VesselHasIntakeAir()
+        {
+            int intakeAirId = PartResourceLibrary.Instance.GetDefinition("IntakeAir")?.id ?? -1;
+            if (intakeAirId == -1) return false;
+            foreach (Part p in vessel.parts)
+            {
+                foreach (PartResource r in p.Resources)
+                {
+                    if (r.info.id == intakeAirId && r.amount > 0) return true;
+                }
+            }
+
+            return false;
         }
         #endregion
     }
