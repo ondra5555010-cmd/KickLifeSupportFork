@@ -6,7 +6,14 @@ echo.
 
 REM Build the project in Release mode
 echo Building project...
-dotnet build -c Release
+where dotnet >nul 2>nul
+if %ERRORLEVEL% EQU 0 (
+    dotnet build -c Release
+) else (
+    echo dotnet SDK not found, using Visual Studio Roslyn compiler...
+    if not exist "bin\Release\net472" mkdir "bin\Release\net472"
+    "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\Roslyn\csc.exe" /nologo /target:library /out:bin\Release\net472\KickLifeSupport.dll /langversion:latest /reference:Libs\Assembly-CSharp.dll /reference:Libs\UnityEngine.dll /reference:Libs\UnityEngine.CoreModule.dll /reference:Libs\UnityEngine.IMGUIModule.dll *.cs
+)
 if %ERRORLEVEL% NEQ 0 (
     echo Build failed!
     pause
@@ -24,7 +31,7 @@ set SOURCE_RADIATORS_CFG=GameData\KickLifeSupport\Radiators.cfg
 set SOURCE_RESOURCE=GameData\KickLifeSupport\Resources\LithiumHydroxide.cfg
 set SOURCE_PARTS=GameData\KickLifeSupport\Parts
 set SOURCE_PATCHES=GameData\KickLifeSupport\Patches
-set DEST_DIR=H:\SteamLibrary\steamapps\common\Kerbal Space Program\GameData\KickLifeSupport
+set DEST_DIR=%~dp0..\GameData\KickLifeSupport
 set DEST_RESOURCES=%DEST_DIR%\Resources
 set DEST_PARTS=%DEST_DIR%\Parts
 set DEST_PATCHES=%DEST_DIR%\Patches
@@ -55,7 +62,4 @@ echo  Deployment complete!
 echo ========================================
 echo.
 
-H:
-cd "H:\SteamLibrary\steamapps\common\Kerbal Space Program"
-explorer .
-start KSP_x64.exe
+explorer "%~dp0..\GameData"

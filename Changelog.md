@@ -1,4 +1,11 @@
 # Changelog
+## Unreleased
+### Changes
+- Made B9 Part Switch a required dependency for scrubber type selection.
+- Removed legacy stock LiOH resource assignment from B9-managed command pods.
+- Added optional Dynamic Battery Storage reporting for continuous capsule systems EC draw.
+- Balanced Regenerative CDRA mass and cost as a crew-capacity-scaled upgrade.
+
 ## (v0.1.3) 5/20/2026
 ### Bug Fixes
 - by @averageksp -- Updated the URL in KickLifeSupport.version to use the correct repository and branch path. (else it won't work properly)

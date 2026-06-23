@@ -1,4 +1,3 @@
-using System.Diagnostics.Eventing.Reader;
 using UnityEngine;
 
 namespace KickLifeSupport
@@ -33,8 +32,7 @@ namespace KickLifeSupport
         internal const double airPerSeat = 2000;
 
         #region Module Fields
-        [KSPField(isPersistant = true, guiActiveEditor = true, guiName = "Scrubber Type", groupName = "KICKLS", groupDisplayName = "Life Support")]
-        [UI_Toggle(disabledText = "LiOH", enabledText = "CDRA")]
+        [KSPField(isPersistant = true)]
         public bool isCDRA = false;
 
         [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Status", groupName = "KICKLS", groupDisplayName = "Life Support")]
@@ -47,16 +45,25 @@ namespace KickLifeSupport
         public float cabinPressure = 101.325f;  // pressure in kPa
         // TODO: Implement cabin pressure simulation
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Scrubber", groupName = "KICKLS", groupDisplayName = "Life Support"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = false, guiName = "Scrubber", groupName = "KICKLS", groupDisplayName = "Life Support"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool scrubberEnabled = true;
 
         [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Scrubber Status", groupName = "KICKLS", groupDisplayName = "Life Support")]
         public string scrubberStatus = "On";
+
+        [KSPField]
+        public float dbsLifeSupportECRate = 0f;
         #endregion
+
+        bool scrubberControlsInitialized = false;
+        bool lastIsCDRA = false;
+        float scrubberECRequestRate = 0.05f;
+        float cdraECRequestRate = 0.5f;
 
         public override void OnStart(StartState state)
         {
             gameSettings = HighLogic.CurrentGame.Parameters.CustomParams<KickLifeSupportSettings>();
+            LoadDBSRates();
 
             PartResourceDefinition wasteDef = PartResourceLibrary.Instance.GetDefinition("Waste");
             if (wasteDef != null) wasteId = wasteDef.id;
@@ -75,22 +82,14 @@ namespace KickLifeSupport
                 }
             }
 
-            if (isCDRA)
-            {
-                Events["ReloadScrubber"].active = false;
-                Events["ReloadScrubber"].guiActive = false;
-                SetLiOHResource(false);
-            }
+            RefreshScrubberControls();
+            UpdateDBSLifeSupportECRate();
+        }
 
-            if (HighLogic.LoadedSceneIsEditor)
-            {
-                Fields["isCDRA"].uiControlEditor.onFieldChanged += (f, o) =>
-                {
-                    SetLiOHResource(!isCDRA);
-                    Events["ReloadScrubber"].active = !isCDRA;
-                    Events["ReloadScrubber"].guiActive = !isCDRA;
-                };
-            }
+        public override void OnUpdate()
+        {
+            RefreshScrubberControls();
+            UpdateDBSLifeSupportECRate();
         }
 
         public void FixedUpdate()
@@ -118,17 +117,18 @@ namespace KickLifeSupport
             bool lockControls = false;
 
             ModuleCommand cmd = part.FindModuleImplementing<ModuleCommand>();
-            bool isHybernating = (cmd != null && cmd.hibernation);
+            bool isHibernating = (cmd != null && cmd.hibernation);
+            UpdateDBSLifeSupportECRate(cmd, isHibernating);
             if (avionicsEnabled)
             {
                 // Unlock control
-                if (cmd != null && !cmd.isEnabled && !isHybernating)
+                if (cmd != null && !cmd.isEnabled && !isHibernating)
                 {
                     cmd.isEnabled = true;
                     vessel.MakeActive();
                 }
 
-                if (!isHybernating)
+                if (!isHibernating)
                 {
                     lockControls = false;
                     if (part.RequestResource(ecId, avionicsEC) < avionicsEC * 0.99)
@@ -245,6 +245,23 @@ namespace KickLifeSupport
 
         #region Scrubber Handling
 
+        void RefreshScrubberControls()
+        {
+            if (!scrubberControlsInitialized || lastIsCDRA != isCDRA)
+            {
+                lastIsCDRA = isCDRA;
+                scrubberControlsInitialized = true;
+
+                Events["ReloadScrubber"].active = !isCDRA;
+                Events["ReloadScrubber"].guiActive = !isCDRA;
+
+                if (isCDRA)
+                {
+                    SetLiOHResource(false);
+                }
+            }
+        }
+
         void SetLiOHResource(bool enabled)
         {
             if (liohId == -1) return;
@@ -274,8 +291,20 @@ namespace KickLifeSupport
             string cartridgePartName = "KickLSLiOHCartridge";
             double cartridgeVolume = 1.5;
 
+            if (isCDRA)
+            {
+                ScreenMessages.PostScreenMessage("CDRA scrubbers do not use LiOH cartridges.", 3f, ScreenMessageStyle.UPPER_CENTER);
+                return;
+            }
+
             PartResource lioh = part.Resources.Get(liohId);
             PartResource waste = part.Resources.Get(wasteId);
+            if (lioh == null)
+            {
+                ScreenMessages.PostScreenMessage("No LiOH tank found on this part.", 3f, ScreenMessageStyle.UPPER_CENTER);
+                return;
+            }
+
             if (lioh.amount >= lioh.maxAmount * 0.95)
             {
                 ScreenMessages.PostScreenMessage("Scrubber is already full.", 3f, ScreenMessageStyle.UPPER_CENTER);
@@ -368,6 +397,58 @@ namespace KickLifeSupport
             if (cmd.hibernation) return false;
 
             return true;
+        }
+        #endregion
+
+        #region Dynamic Battery Storage
+        void LoadDBSRates()
+        {
+            ConfigNode[] nodes = GameDatabase.Instance.GetConfigNodes("KICKLS_SETTINGS");
+            if (nodes.Length == 0) return;
+
+            TryGetFloat(nodes[0], "SCRUBBER_EC_RATE", ref scrubberECRequestRate);
+            TryGetFloat(nodes[0], "CDRA_EC_RATE", ref cdraECRequestRate);
+        }
+
+        void TryGetFloat(ConfigNode node, string key, ref float value)
+        {
+            if (node == null || !node.HasValue(key)) return;
+            if (float.TryParse(node.GetValue(key), out float parsed))
+            {
+                value = parsed;
+            }
+        }
+
+        void UpdateDBSLifeSupportECRate(ModuleCommand cmd = null, bool isHibernating = false)
+        {
+            float estimate = 0f;
+            int seats = part != null && part.CrewCapacity > 0 ? part.CrewCapacity : 1;
+
+            if (scrubberEnabled)
+            {
+                estimate += (isCDRA ? cdraECRequestRate : scrubberECRequestRate) * seats;
+            }
+
+            if (gameSettings == null || gameSettings.useCabinTempSystem)
+            {
+                if (climateControlEnabled)
+                {
+                    estimate += systemECRate;
+                }
+            }
+
+            if (avionicsEnabled)
+            {
+                if (cmd == null && part != null)
+                {
+                    cmd = part.FindModuleImplementing<ModuleCommand>();
+                    isHibernating = cmd != null && cmd.hibernation;
+                }
+
+                estimate += isHibernating ? avionicsECRate * 0.1f : avionicsECRate;
+            }
+
+            dbsLifeSupportECRate = estimate;
         }
         #endregion
 
