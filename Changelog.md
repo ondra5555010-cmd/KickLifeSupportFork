@@ -5,6 +5,7 @@
 - Removed legacy stock LiOH resource assignment from B9-managed command pods.
 - Added optional Dynamic Battery Storage reporting for continuous capsule systems EC draw.
 - Balanced Regenerative CDRA mass and cost as a crew-capacity-scaled upgrade.
+- Excluded external command seats from cabin life-support patches.
 
 ## (v0.1.3) 5/20/2026
 ### Bug Fixes
