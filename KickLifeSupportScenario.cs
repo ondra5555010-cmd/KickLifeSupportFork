@@ -1,4 +1,5 @@
-﻿using JetBrains.Annotations;
+using JetBrains.Annotations;
+using KSP.UI.Screens;
 using System;
 using System.Collections.Generic;
 using System.Net;
@@ -10,11 +11,70 @@ namespace KickLifeSupport
     public class KickLifeSupportScenario : ScenarioModule
     {
         const double epsilon = 0.00000001;
+        public static double AmbientPressureMinimumKPa { get; private set; } = 50.0;
+        public static double OpenLoopELSPressureMinimumKPa { get; private set; } = 5.0;
 
         public static KickLifeSupportScenario Instance { get; private set; }
         KickLifeSupportSettings gameSettings;
 
+        public double GraceOxygen => graceO2;
+        public double GraceWater => graceWater;
+        public double GraceFood => graceFood;
+        public double GraceClimate => graceClimate;
+        public double GraceTemp => graceTemp;
+        public double CO2WarningLevel => co2Warning;
+        public double CO2FatalLevel => co2Fatal;
+
         public Dictionary<Guid, LifeSupportStatus> database = new Dictionary<Guid, LifeSupportStatus>();
+
+        class VesselLifeSupportContext
+        {
+            public Vessel vessel;
+            public bool loaded;
+            public int liveCrew;
+            public int pressurizedCrew;
+            public int ambientDependentCrew;
+            public int cabinCapacity;
+            public float cabinCO2;
+            public bool ambientSafe;
+            public bool underwater;
+            public double occupancyScale;
+            public readonly List<KickLifeSupportModule> lifeSupportModules = new List<KickLifeSupportModule>();
+            public readonly List<KickTemperatureControlModule> temperatureModules = new List<KickTemperatureControlModule>();
+            public readonly List<ProtoLifeSupportPart> protoLifeSupportParts = new List<ProtoLifeSupportPart>();
+            public readonly List<ProtoTemperaturePart> protoTemperatureParts = new List<ProtoTemperaturePart>();
+            public readonly List<ScrubberContribution> scrubberContributions = new List<ScrubberContribution>();
+        }
+
+        class ProtoLifeSupportPart
+        {
+            public ProtoPartSnapshot part;
+            public ProtoPartModuleSnapshot module;
+            public int crew;
+            public int capacity;
+            public int atmosphereControlMode;
+            public bool atmosphericControlEnabled;
+        }
+
+        class ProtoTemperaturePart
+        {
+            public ProtoPartSnapshot part;
+            public ProtoPartModuleSnapshot module;
+            public int crew;
+            public int capacity;
+            public bool enabled;
+            public double ecRate;
+        }
+
+        struct ScrubberContribution
+        {
+            public KickLifeSupportModule module;
+            public ProtoLifeSupportPart protoPart;
+            public int mode;
+            public int capacity;
+            public bool loaded;
+            public bool usesOpenLoopOxygenAssist;
+        }
 
         /// <summary>
         /// The total amount of air in liters per seat
@@ -28,11 +88,6 @@ namespace KickLifeSupport
         /// The CO2 concentration (in liters) threshold for fatality. This is 10% of airPerKerbal.
         /// </summary>
         const double co2Fatal = 0.1;
-        /// <summary>
-        /// The current cabin CO2 amount
-        /// </summary>
-        float cabinCO2 = 0f;
-
         #region Resource IDs
         int o2Id = -1;
         int co2Id = -1;
@@ -54,10 +109,12 @@ namespace KickLifeSupport
         float wasteRequestRate;
         float wasteWaterRequestRate;
         float lithiumHydroxideRequestRate;
-        float cdraECRequestRate;
+        float regenerativeScrubberECRequestRate;
 
         // EC Rates
         float scrubberECRequestRate;
+        float openLoopELSECRequestRate;
+        float openLoopELSOxygenMultiplier;
 
         // Grace Periods
         float graceO2;
@@ -65,6 +122,8 @@ namespace KickLifeSupport
         float graceFood;
         float graceClimate;
         float graceTemp;
+        float ambientPressureMinimum;
+        float openLoopELSPressureMinimum;
 
         // Heat Generation
         public float kerbalHeat;
@@ -98,7 +157,8 @@ namespace KickLifeSupport
 
             foreach (Vessel v in FlightGlobals.Vessels)
             {
-                if (!IsValidVessel(v)) continue;
+                VesselLifeSupportContext ctx = BuildContext(v);
+                if (ctx == null) continue;
 
                 LifeSupportStatus data = GetData(v.id);
 
@@ -117,30 +177,27 @@ namespace KickLifeSupport
                 // If time went backwards or there was a big spike, reset.
                 if (deltaTime < 0) return;
 
-                int liveCrew = GetLiveCrew(v);
-                int crewCapacity = GetCrewCapacity(v);
-
-                float totalCabinCO2 = GetTotalCO2(v);
-                data.cabinCO2 = totalCabinCO2;
+                data.cabinCO2 = ctx.cabinCO2;
 
                 /*
                 if (v == FlightGlobals.ActiveVessel)
                     Debug.Log($"[KICKLS] Processing Active Vessel: {v.vesselName} | Crew: {liveCrew} | dT: {deltaTime}");
                 */
 
-                BreatheAir(v, data, deltaTime, liveCrew);
-                RunScrubber(v, data, deltaTime, crewCapacity);
-                RunClimateControl(v, data, deltaTime);
-                EatFood(v, data, deltaTime, liveCrew);
-                DrinkWater(v, data, deltaTime, liveCrew);
-                MonitorTemperature(v, data, deltaTime);
+                BreatheAir(ctx, data, deltaTime);
+                RunScrubber(ctx, data, deltaTime);
+                RunClimateControl(ctx, data, deltaTime);
+                EatFood(v, data, deltaTime, ctx.liveCrew);
+                DrinkWater(v, data, deltaTime, ctx.liveCrew);
+                MonitorTemperature(ctx, data, deltaTime);
 
-                CheckConditions(data, v);
+                CheckGraceAnnouncements(data, v);
+                CheckConditions(ctx, data, deltaTime);
 
                 // Redistribute CO2
-                if (crewCapacity > 0)
+                if (ctx.cabinCapacity > 0)
                 {
-                    SetCabinCO2(v, data.cabinCO2, crewCapacity);
+                    SetCabinCO2(ctx, data.cabinCO2);
                 }
             }
         }
@@ -169,7 +226,141 @@ namespace KickLifeSupport
 
             if (vessel.GetCrewCount() == 0) return false;
 
+            if (!VesselHasLifeSupportModules(vessel)) return false;
+
             return true;
+        }
+
+        VesselLifeSupportContext BuildContext(Vessel vessel)
+        {
+            if (vessel == null) return null;
+
+            if ((vessel.vesselType == VesselType.Debris) ||
+                (vessel.vesselType == VesselType.Flag) ||
+                (vessel.vesselType == VesselType.SpaceObject) ||
+                (vessel.vesselType == VesselType.Unknown) ||
+                vessel.vesselType == VesselType.EVA ||
+                vessel.state == Vessel.State.DEAD ||
+                vessel.GetCrewCount() == 0)
+            {
+                return null;
+            }
+
+            VesselLifeSupportContext ctx = new VesselLifeSupportContext
+            {
+                vessel = vessel,
+                loaded = vessel.loaded,
+                ambientSafe = IsAmbientAtmosphereSafe(vessel),
+                underwater = IsVesselUnderwater(vessel)
+            };
+
+            if (vessel.loaded)
+            {
+                foreach (Part part in vessel.parts)
+                {
+                    if (part == null) continue;
+
+                    KickLifeSupportModule lifeSupport = part.FindModuleImplementing<KickLifeSupportModule>();
+                    if (lifeSupport != null && lifeSupport.lifeSupportEnabled)
+                    {
+                        ctx.lifeSupportModules.Add(lifeSupport);
+                        ctx.liveCrew += part.protoModuleCrew.Count;
+
+                        if (lifeSupport.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
+                        {
+                            ctx.ambientDependentCrew += part.protoModuleCrew.Count;
+                        }
+                        else
+                        {
+                            ctx.pressurizedCrew += part.protoModuleCrew.Count;
+                            ctx.cabinCapacity += part.CrewCapacity;
+                            ctx.cabinCO2 += lifeSupport.cabinCO2;
+                        }
+                    }
+
+                    if (gameSettings != null && gameSettings.useCabinTempSystem)
+                    {
+                        KickTemperatureControlModule temperature = part.FindModuleImplementing<KickTemperatureControlModule>();
+                        if (temperature != null)
+                        {
+                            ctx.temperatureModules.Add(temperature);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                foreach (ProtoPartSnapshot part in vessel.protoVessel.protoPartSnapshots)
+                {
+                    if (part == null) continue;
+                    int capacity = 0;
+                    if (part.partInfo != null && part.partInfo.partPrefab != null)
+                    {
+                        capacity = part.partInfo.partPrefab.CrewCapacity;
+                    }
+
+                    int crew = part.protoModuleCrew.Count;
+
+                    foreach (ProtoPartModuleSnapshot module in part.modules)
+                    {
+                        if (module.moduleName == "KickLifeSupportModule" && IsLifeSupportModuleEnabled(module))
+                        {
+                            ProtoLifeSupportPart record = new ProtoLifeSupportPart
+                            {
+                                part = part,
+                                module = module,
+                                crew = crew,
+                                capacity = capacity,
+                                atmosphereControlMode = GetAtmosphereControlMode(module),
+                                atmosphericControlEnabled = IsAtmosphericControlEnabled(module)
+                            };
+
+                            ctx.protoLifeSupportParts.Add(record);
+                            ctx.liveCrew += crew;
+
+                            if (record.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
+                            {
+                                ctx.ambientDependentCrew += crew;
+                            }
+                            else
+                            {
+                                ctx.pressurizedCrew += crew;
+                                ctx.cabinCapacity += capacity;
+                                if (float.TryParse(module.moduleValues.GetValue("cabinCO2"), out float co2))
+                                {
+                                    ctx.cabinCO2 += co2;
+                                }
+                            }
+                        }
+                        else if (module.moduleName == "KickTemperatureControlModule")
+                        {
+                            double ecRate = 0.03;
+                            string val = module.moduleValues.GetValue("systemECRate");
+                            if (val != null) double.TryParse(val, out ecRate);
+
+                            val = module.moduleValues.GetValue("climateControlEnabled");
+                            bool enabled = val == null || (bool.TryParse(val, out bool bVal) && bVal);
+
+                            ctx.protoTemperatureParts.Add(new ProtoTemperaturePart
+                            {
+                                part = part,
+                                module = module,
+                                crew = crew,
+                                capacity = capacity,
+                                enabled = enabled,
+                                ecRate = ecRate
+                            });
+                        }
+                    }
+                }
+            }
+
+            if (ctx.loaded && ctx.lifeSupportModules.Count == 0) return null;
+            if (!ctx.loaded && ctx.protoLifeSupportParts.Count == 0) return null;
+            if (ctx.liveCrew == 0) return null;
+
+            ctx.occupancyScale = ctx.cabinCapacity > 0 ? Math.Min((double)ctx.pressurizedCrew / ctx.cabinCapacity, 1.0) : 0.0;
+            return ctx;
         }
 
         #region Save/Load
@@ -313,13 +504,22 @@ namespace KickLifeSupport
             wasteWaterRequestRate = GetValue(settings, "WASTEWATER_RATE");
             lithiumHydroxideRequestRate = GetValue(settings, "LITHIUMHYDROXIDE_RATE");
             scrubberECRequestRate = GetValue(settings, "SCRUBBER_EC_RATE");
-            cdraECRequestRate = GetValue(settings, "CDRA_EC_RATE");
+            regenerativeScrubberECRequestRate = GetValue(settings, "REGENERATIVE_SCRUBBER_EC_RATE");
+            openLoopELSECRequestRate = GetValue(settings, "OPEN_LOOP_ELS_EC_RATE");
+            openLoopELSOxygenMultiplier = GetValue(settings, "OPEN_LOOP_ELS_OXYGEN_MULTIPLIER");
+            if (openLoopELSOxygenMultiplier <= 0) openLoopELSOxygenMultiplier = 5f;
 
             graceO2 = GetValue(settings, "GRACE_OXYGEN");
             graceFood = GetValue(settings, "GRACE_FOOD");
             graceWater = GetValue(settings, "GRACE_WATER");
             graceClimate = GetValue(settings, "GRACE_CLIMATE");
             graceTemp = GetValue(settings, "GRACE_TEMP");
+            ambientPressureMinimum = GetValue(settings, "AMBIENT_PRESSURE_MINIMUM");
+            if (ambientPressureMinimum <= 0) ambientPressureMinimum = 50f;
+            AmbientPressureMinimumKPa = ambientPressureMinimum;
+            openLoopELSPressureMinimum = GetValue(settings, "OPEN_LOOP_ELS_PRESSURE_MINIMUM");
+            if (openLoopELSPressureMinimum <= 0) openLoopELSPressureMinimum = 5f;
+            OpenLoopELSPressureMinimumKPa = openLoopELSPressureMinimum;
 
             kerbalHeat = GetValue(settings, "KERBAL_HEAT");
         }
@@ -345,6 +545,7 @@ namespace KickLifeSupport
 
                 foreach (KickLifeSupportModule m in modules)
                 {
+                    if (!m.lifeSupportEnabled) continue;
                     totalCo2 += m.cabinCO2;
                 }
             }
@@ -358,6 +559,7 @@ namespace KickLifeSupport
                     {
                         if (m.moduleName == "KickLifeSupportModule")
                         {
+                            if (!IsLifeSupportModuleEnabled(m)) continue;
                             if (float.TryParse(m.moduleValues.GetValue("cabinCO2"), out float val))
                             {
                                 totalCo2 += val;
@@ -370,37 +572,35 @@ namespace KickLifeSupport
             return totalCo2;
         }
 
-        void SetCabinCO2(Vessel v, float totalCO2, int crewCapacity)
+        void SetCabinCO2(VesselLifeSupportContext ctx, float totalCO2)
         {
-            if (v.loaded)
+            if (ctx.loaded)
             {
-                // --- LOADED VESSEL ---
-                List<KickLifeSupportModule> modules = v.FindPartModulesImplementing<KickLifeSupportModule>();
-
-                foreach (KickLifeSupportModule m in modules)
+                foreach (KickLifeSupportModule m in ctx.lifeSupportModules)
                 {
-                    float share = (float)m.part.CrewCapacity / crewCapacity;
+                    if (m.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
+                    {
+                        m.cabinCO2 = 0;
+                        continue;
+                    }
+
+                    float share = (float)m.part.CrewCapacity / ctx.cabinCapacity;
                     m.cabinCO2 = totalCO2 * share;
                 }
             }
             else
             {
-                // --- UNLOADED VESSEL ---
-
-                foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
+                foreach (ProtoLifeSupportPart p in ctx.protoLifeSupportParts)
                 {
-                    if (p.partInfo == null || p.partInfo.partPrefab == null) continue;
-                    int pCap = p.partInfo.partPrefab.CrewCapacity;
-                    if (pCap == 0) continue;
-
-                    foreach (ProtoPartModuleSnapshot m in p.modules)
+                    if (p.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
                     {
-                        if (m.moduleName == "KickLifeSupportModule")
-                        {
-                            float share = (float)(pCap / crewCapacity);
-                            m.moduleValues.SetValue("cabinCO2", totalCO2 * share);
-                        }
+                        p.module.moduleValues.SetValue("cabinCO2", 0);
+                        continue;
                     }
+
+                    if (p.capacity == 0) continue;
+                    float share = (float)p.capacity / ctx.cabinCapacity;
+                    p.module.moduleValues.SetValue("cabinCO2", totalCO2 * share);
                 }
             }
         }
@@ -409,18 +609,97 @@ namespace KickLifeSupport
 
         #region Simulation
 
-        void BreatheAir(Vessel v, LifeSupportStatus status, double deltaTime, int crewCount)
+        void BreatheAir(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
         {
-            (double co2Produced, double o2Ratio) resparation = ProcessConsumption(v, deltaTime, o2Id, o2RequestRate, co2Id, co2RequestRate, crewCount, false);
+            ProcessOpenLoopELS(ctx, status, deltaTime);
+            int unsafeAmbientCrew = ctx.ambientSafe ? 0 : ctx.ambientDependentCrew;
+
+            (double co2Produced, double o2Ratio) resparation = ProcessConsumption(ctx.vessel, deltaTime, o2Id, o2RequestRate, co2Id, co2RequestRate, ctx.pressurizedCrew, false);
 
             // Todo: Add a player setting for debug data
             //Debug.Log($"[KICKLS] BreatheAir Result -> Produced: {resparation.co2Produced} | Ratio: {resparation.o2Ratio}");
 
             status.cabinCO2 += (float)resparation.co2Produced;
-            if (resparation.o2Ratio < 0.99)
+            status.ambientDependentCrew = ctx.ambientDependentCrew;
+            status.ambientAtmosphereUnsafe = unsafeAmbientCrew > 0;
+            status.ambientAtmosphereUnderwater = ctx.underwater;
+            double co2Level = CalculateCabinCO2(status, ctx.cabinCapacity);
+
+            if (resparation.o2Ratio < 0.99 || co2Level >= co2Fatal)
                 status.lowO2Time += deltaTime;
             else
                 status.lowO2Time = 0;
+
+            if (unsafeAmbientCrew > 0)
+                status.ambientExposureTime += deltaTime;
+            else
+                status.ambientExposureTime = 0;
+        }
+
+        void ProcessOpenLoopELS(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
+        {
+            status.activeOpenLoopELSVentCapacity = 0;
+
+            if (ctx.loaded)
+            {
+                foreach (KickLifeSupportModule m in ctx.lifeSupportModules)
+                {
+                    if (m.atmosphereControlMode != KickLifeSupportModule.AtmosphereControlOpenLoopELS) continue;
+
+                    int partCapacity = Math.Max(m.part.CrewCapacity, 1);
+
+                    if (!m.scrubberEnabled)
+                    {
+                        m.SetAtmosphericControlStatus("Inactive");
+                        continue;
+                    }
+
+                    if (!IsOpenLoopELSEnvironmentUsable(ctx))
+                    {
+                        m.SetAtmosphericControlStatus(GetOpenLoopELSEnvironmentStatus(ctx));
+                        continue;
+                    }
+
+                    double ecReq = openLoopELSECRequestRate * deltaTime * partCapacity * ctx.occupancyScale;
+                    (double ecConsumed, double ecRatio) ecResult = ConsumeResource(ctx.vessel, electricChargeId, ecReq);
+                    if (ecResult.ecRatio < 0.99)
+                    {
+                        m.SetAtmosphericControlStatus("No EC");
+                        continue;
+                    }
+
+                    status.activeOpenLoopELSVentCapacity += partCapacity;
+                    m.SetAtmosphericControlStatus("ELS Active");
+                }
+            }
+            else
+            {
+                foreach (ProtoLifeSupportPart p in ctx.protoLifeSupportParts)
+                {
+                    if (p.atmosphereControlMode != KickLifeSupportModule.AtmosphereControlOpenLoopELS) continue;
+
+                    if (!p.atmosphericControlEnabled)
+                    {
+                        continue;
+                    }
+                    if (!IsOpenLoopELSEnvironmentUsable(ctx))
+                    {
+                        continue;
+                    }
+
+                    int partCapacity = Math.Max(p.capacity, 1);
+
+                    double ecReq = openLoopELSECRequestRate * deltaTime * partCapacity * ctx.occupancyScale;
+                    (double ecConsumed, double ecRatio) ecResult = ConsumeResource(ctx.vessel, electricChargeId, ecReq);
+                    if (ecResult.ecRatio < 0.99)
+                    {
+                        continue;
+                    }
+
+                    status.activeOpenLoopELSVentCapacity += partCapacity;
+                }
+            }
+
         }
 
         /// <summary>
@@ -431,193 +710,322 @@ namespace KickLifeSupport
         /// <param name="deltaTime"></param>
         /// <param name="totalCrewOnShip"></param>
         /// <remarks>This whole method needs a rewrite, but a good one.</remarks>
-        void RunScrubber(Vessel v, LifeSupportStatus status, double deltaTime, int totalCrewOnShip)
+        void RunScrubber(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
         {
-            double totalCDRARemoved = 0;
+            double totalRegenerativeRemoved = 0;
             double totalLiOHRemoved = 0;
+            double totalVentedRemoved = 0;
+            double activeRegenerativeSystemCapacity = 0;
+            double activeLiOHSystemCapacity = 0;
 
-            int activeCDRACount = 0;
+            int activeRegenerativeCount = 0;
             int activeLiOHCount = 0;
+            List<ScrubberContribution> contributions = ctx.scrubberContributions;
+            contributions.Clear();
 
             // Rates per seat
             double baseScrubRate = scrubberRequestRate * deltaTime;
             double baseEcRate = scrubberECRequestRate * deltaTime;
-            double baseLiohRate = lithiumHydroxideRequestRate * deltaTime;
-            double baseCdraEcRate = cdraECRequestRate * deltaTime;
+            double baseRegenerativeScrubberEcRate = regenerativeScrubberECRequestRate * deltaTime;
+            double availableCO2 = Math.Max(status.cabinCO2, 0);
+            double lithiumHydroxidePerCO2 = scrubberRequestRate > epsilon ? lithiumHydroxideRequestRate / scrubberRequestRate : 0;
+            double openLoopExtraOxygenPerCO2 = scrubberRequestRate > epsilon ? o2RequestRate * Math.Max(openLoopELSOxygenMultiplier - 1.0, 0) / scrubberRequestRate : 0;
 
-            if (v.loaded)
+            if (ctx.loaded)
             {
-                // --- LOADED VESSEL ---
-                List<KickLifeSupportModule> modules = v.FindPartModulesImplementing<KickLifeSupportModule>();
-
-                foreach (KickLifeSupportModule m in modules)
+                foreach (KickLifeSupportModule m in ctx.lifeSupportModules)
                 {
+                    if (m.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
+                    {
+                        m.SetAtmosphericControlStatus(GetAmbientAtmosphereStatus(ctx));
+                        continue;
+                    }
+
+                    if (m.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlPressurizedCabin)
+                    {
+                        m.SetAtmosphericControlStatus("Inactive");
+                        continue;
+                    }
+
+                    if (m.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlOpenLoopELS)
+                    {
+                        int elsCapacity = Math.Max(m.part.CrewCapacity, 1);
+                        if (!m.scrubberEnabled)
+                        {
+                            m.SetAtmosphericControlStatus(ctx.ambientSafe ? "Safe Env" : "Inactive");
+                            if (ctx.ambientSafe)
+                            {
+                                contributions.Add(new ScrubberContribution
+                                {
+                                    module = m,
+                                    mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
+                                    capacity = elsCapacity,
+                                    loaded = true,
+                                    usesOpenLoopOxygenAssist = false
+                                });
+                            }
+                        }
+                        else if (m.rawScrubberStatus == "ELS Active")
+                        {
+                            contributions.Add(new ScrubberContribution
+                            {
+                                module = m,
+                                mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
+                                capacity = elsCapacity,
+                                loaded = true,
+                                usesOpenLoopOxygenAssist = true
+                            });
+                        }
+                        continue;
+                    }
+
                     if (!m.scrubberEnabled)
                     {
-                        m.scrubberStatus = "Off";
+                        m.SetAtmosphericControlStatus("Inactive");
                         continue;
                     }
 
                     int partCapacity = m.part.CrewCapacity;
                     if (partCapacity == 0) partCapacity = 1;
 
-                    double ecReq = m.isCDRA ?
-                        baseCdraEcRate * partCapacity :
-                        baseEcRate * partCapacity;
+                    double ecReq = IsRegenerativeScrubber(m.atmosphereControlMode) ?
+                        baseRegenerativeScrubberEcRate * partCapacity * ctx.occupancyScale :
+                        baseEcRate * partCapacity * ctx.occupancyScale;
 
-                    (double amountConsumed, double ratio) ecRes = ConsumeResource(v, electricChargeId, ecReq);
+                    (double amountConsumed, double ratio) ecRes = ConsumeResource(ctx.vessel, electricChargeId, ecReq);
 
                     if (ecRes.ratio < 0.99)
                     {
-                        m.scrubberStatus = "No Power";
+                        m.SetAtmosphericControlStatus("No EC");
                         continue;
                     }
 
-                    if (m.isCDRA)
+                    contributions.Add(new ScrubberContribution
                     {
-                        double scrubAmount = baseScrubRate * partCapacity;
-                        totalCDRARemoved += scrubAmount;
-                        ProduceResource(v, co2Id, scrubAmount);
-                        m.scrubberStatus = "Active";
-                        activeCDRACount++;
-                    }
-                    else
-                    {
-                        double liohReq = baseLiohRate * partCapacity;
-                        double liohTaken = m.part.RequestResource(lithiumHydroxideId, liohReq);
-
-                        if (liohTaken < liohReq - epsilon)
-                        {
-                            m.scrubberStatus = "No LiOH";
-                        }
-                        else
-                        {
-                            m.part.RequestResource(wasteId, -liohTaken);
-                            totalLiOHRemoved += (baseScrubRate * partCapacity);
-                            m.scrubberStatus = "Active";
-                            activeLiOHCount++;
-                        }
-                    }
+                        module = m,
+                        mode = m.atmosphereControlMode,
+                        capacity = partCapacity,
+                        loaded = true
+                    });
                 }
             }
             else
             {
-                foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
+                if (status.activeOpenLoopELSVentCapacity > 0)
                 {
-                    bool isScrubberOn = false;
-                    bool isCDRA = false;
-                    foreach (ProtoPartModuleSnapshot m in p.modules)
+                    contributions.Add(new ScrubberContribution
                     {
-                        if (m.moduleName == "KickLifeSupportModule")
+                        mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
+                        capacity = (int)Math.Max(status.activeOpenLoopELSVentCapacity, 1),
+                        loaded = false,
+                        usesOpenLoopOxygenAssist = true
+                    });
+                }
+
+                foreach (ProtoLifeSupportPart p in ctx.protoLifeSupportParts)
+                {
+                    bool isScrubberOn = p.atmosphericControlEnabled;
+                    int atmosphereControlMode = p.atmosphereControlMode;
+                    int partCapacity = Math.Max(p.capacity, 1);
+
+                    if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
+                    {
+                        continue;
+                    }
+
+                    if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlPressurizedCabin)
+                    {
+                        continue;
+                    }
+
+                    if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlOpenLoopELS)
+                    {
+                        if (!isScrubberOn && ctx.ambientSafe)
                         {
-                            if (bool.TryParse(m.moduleValues.GetValue("scrubberEnabled"), out bool val) && val)
+                            contributions.Add(new ScrubberContribution
                             {
-                                isScrubberOn = true;
-                            }
-                            if (bool.TryParse(m.moduleValues.GetValue("isCDRA"), out bool val2) && val2)
-                            {
-                                isCDRA = val2;
-                            }
+                                protoPart = p,
+                                mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
+                                capacity = partCapacity,
+                                loaded = false,
+                                usesOpenLoopOxygenAssist = false
+                            });
                         }
+                        continue;
                     }
 
                     if (!isScrubberOn) continue;
 
-                    int partCapacity = 1;
-                    if (p.partInfo != null && p.partInfo.partPrefab != null)
-                        partCapacity = p.partInfo.partPrefab.CrewCapacity;
-                    if (partCapacity == 0) partCapacity = 1;
-
-                    double ecReq = isCDRA ? 
-                        baseCdraEcRate * partCapacity :
-                        baseEcRate * partCapacity;
-                    (double amountConsumed, double ratio) ecRes = ConsumeResource(v, electricChargeId, ecReq);
+                    double ecReq = IsRegenerativeScrubber(atmosphereControlMode) ?
+                        baseRegenerativeScrubberEcRate * partCapacity * ctx.occupancyScale :
+                        baseEcRate * partCapacity * ctx.occupancyScale;
+                    (double amountConsumed, double ratio) ecRes = ConsumeResource(ctx.vessel, electricChargeId, ecReq);
                     if (ecRes.ratio < 0.99) continue;
 
-                    if (isCDRA)
+                    contributions.Add(new ScrubberContribution
                     {
-                        double scrubAmount = baseScrubRate * partCapacity;
-                        
-                        totalCDRARemoved += (baseScrubRate * partCapacity);
-                        ProduceResource(v, co2Id, scrubAmount);
-                        activeCDRACount++;
-                    }
-                    else
-                    {
-                        double liohReq = baseLiohRate * partCapacity;
-                        double liohTaken = 0;
-
-                        foreach (ProtoPartResourceSnapshot r in p.resources)
-                        {
-                            if (r.definition.id == lithiumHydroxideId)
-                            {
-                                if (r.amount >= liohReq)
-                                {
-                                    r.amount -= liohReq;
-                                    liohTaken = liohReq;
-                                }
-                                else
-                                {
-                                    if (TryReloadScrubberUnloaded(v, p))
-                                    {
-                                        if (r.amount >= liohReq)
-                                        {
-                                            r.amount -= liohReq;
-                                            liohTaken = liohReq;
-                                        }
-                                        else
-                                        {
-                                            // For safety
-                                            liohTaken = r.amount;
-                                            r.amount = 0;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // Cartridge reload failed
-                                        liohTaken = r.amount;
-                                        r.amount = 0;
-                                    }
-                                }
-                                break;
-                            }
-                        }
-
-                        if (liohTaken >= liohReq - epsilon)
-                        {
-                            double wasteToAdd = liohTaken;
-                            foreach (ProtoPartResourceSnapshot r in p.resources)
-                            {
-                                if (r.definition.id == wasteId)
-                                {
-                                    double space = r.maxAmount - r.amount;
-                                    if (space >= wasteToAdd)
-                                    {
-                                        r.amount += wasteToAdd;
-                                        wasteToAdd = 0;
-                                    }
-                                    else
-                                    {
-                                        r.amount = r.maxAmount;
-                                        wasteToAdd -= space;
-                                    }
-                                }
-                            }
-                            totalLiOHRemoved += (baseScrubRate * partCapacity);
-                            activeLiOHCount++;
-                        }
-                    }
-
-                    
+                        protoPart = p,
+                        mode = atmosphereControlMode,
+                        capacity = partCapacity,
+                        loaded = false
+                    });
                 }
             }
 
-            status.cabinCO2 -= (float)(totalCDRARemoved + totalLiOHRemoved);
-            status.lastCDRAScrubAmount = totalCDRARemoved;
+            int totalCapacity = 0;
+            foreach (ScrubberContribution contribution in contributions)
+            {
+                totalCapacity += Math.Max(contribution.capacity, 0);
+            }
+
+            if (totalCapacity > 0 && availableCO2 > epsilon)
+            {
+                double totalScrubRequest = Math.Min(availableCO2, baseScrubRate * totalCapacity);
+
+                foreach (ScrubberContribution contribution in contributions)
+                {
+                    double requestedScrubAmount = totalScrubRequest * contribution.capacity / totalCapacity;
+                    double actualScrubAmount = requestedScrubAmount;
+
+                    if (IsRegenerativeScrubber(contribution.mode))
+                    {
+                        activeRegenerativeSystemCapacity += contribution.capacity;
+                        totalRegenerativeRemoved += actualScrubAmount;
+                        ProduceResource(ctx.vessel, co2Id, actualScrubAmount);
+                        if (contribution.module != null) contribution.module.SetAtmosphericControlStatus("Active");
+                        activeRegenerativeCount++;
+                    }
+                    else if (contribution.mode == KickLifeSupportModule.AtmosphereControlLiOH)
+                    {
+                        activeLiOHSystemCapacity += contribution.capacity;
+                        double liohReq = requestedScrubAmount * lithiumHydroxidePerCO2;
+                        double liohTaken = contribution.loaded
+                            ? ConsumeLoadedLiOH(contribution.module, liohReq)
+                            : ConsumeProtoLiOH(ctx.vessel, contribution.protoPart, liohReq);
+
+                        actualScrubAmount = lithiumHydroxidePerCO2 > epsilon ? Math.Min(requestedScrubAmount, liohTaken / lithiumHydroxidePerCO2) : 0;
+                        totalLiOHRemoved += actualScrubAmount;
+
+                        if (liohTaken < liohReq - epsilon)
+                        {
+                            if (contribution.module != null) contribution.module.SetAtmosphericControlStatus("No LiOH");
+                        }
+                        else
+                        {
+                            if (contribution.module != null) contribution.module.SetAtmosphericControlStatus("Active");
+                        }
+
+                        if (actualScrubAmount > epsilon) activeLiOHCount++;
+                    }
+                    else if (contribution.mode == KickLifeSupportModule.AtmosphereControlOpenLoopELS)
+                    {
+                        if (contribution.usesOpenLoopOxygenAssist)
+                        {
+                            double o2Req = requestedScrubAmount * openLoopExtraOxygenPerCO2;
+                            (double o2Consumed, double o2Ratio) o2Result = ConsumeResource(ctx.vessel, o2Id, o2Req);
+
+                            if (o2Result.o2Ratio < 0.99)
+                            {
+                                if (contribution.module != null) contribution.module.SetAtmosphericControlStatus("ELS Active");
+                            }
+                            else if (contribution.module != null)
+                            {
+                                contribution.module.SetAtmosphericControlStatus("ELS Active");
+                            }
+                        }
+
+                        totalVentedRemoved += actualScrubAmount;
+                    }
+                }
+            }
+            else if (totalCapacity > 0)
+            {
+                foreach (ScrubberContribution contribution in contributions)
+                {
+                    if (contribution.module == null) continue;
+
+                    if (IsRegenerativeScrubber(contribution.mode) ||
+                        contribution.mode == KickLifeSupportModule.AtmosphereControlLiOH)
+                    {
+                        if (IsRegenerativeScrubber(contribution.mode))
+                            activeRegenerativeSystemCapacity += contribution.capacity;
+                        else
+                            activeLiOHSystemCapacity += contribution.capacity;
+
+                        contribution.module.SetAtmosphericControlStatus("Active");
+                    }
+                    else if (contribution.usesOpenLoopOxygenAssist)
+                    {
+                        contribution.module.SetAtmosphericControlStatus("ELS Active");
+                    }
+                }
+            }
+
+            status.cabinCO2 -= (float)(totalRegenerativeRemoved + totalLiOHRemoved + totalVentedRemoved);
+            status.lastRegenerativeScrubAmount = totalRegenerativeRemoved;
             status.lastLiOHScrubAmount = totalLiOHRemoved;
-            status.activeCDRAScrubberCount = activeCDRACount;
+            status.activeRegenerativeScrubberSystemCapacity = activeRegenerativeSystemCapacity;
+            status.activeLiOHSystemCapacity = activeLiOHSystemCapacity;
+            status.activeRegenerativeScrubberCount = activeRegenerativeCount;
             status.activeLiOHScrubberCount = activeLiOHCount;
             if (status.cabinCO2 < 0) status.cabinCO2 = 0;
+        }
+
+        double ConsumeLoadedLiOH(KickLifeSupportModule module, double amount)
+        {
+            if (module == null || amount <= epsilon) return 0;
+
+            double taken = module.part.RequestResource(lithiumHydroxideId, amount);
+            if (taken > epsilon)
+            {
+                module.part.RequestResource(wasteId, -taken);
+            }
+
+            return taken;
+        }
+
+        double ConsumeProtoLiOH(Vessel vessel, ProtoLifeSupportPart record, double amount)
+        {
+            if (record == null || record.part == null || amount <= epsilon) return 0;
+
+            double taken = 0;
+            foreach (ProtoPartResourceSnapshot r in record.part.resources)
+            {
+                if (r.definition.id != lithiumHydroxideId) continue;
+
+                if (r.amount < amount)
+                {
+                    TryReloadScrubberUnloaded(vessel, record.part);
+                }
+
+                taken = Math.Min(r.amount, amount);
+                r.amount -= taken;
+                break;
+            }
+
+            if (taken > epsilon)
+            {
+                AddProtoWaste(record.part, taken);
+            }
+
+            return taken;
+        }
+
+        void AddProtoWaste(ProtoPartSnapshot part, double amount)
+        {
+            if (part == null || amount <= epsilon) return;
+
+            double remaining = amount;
+            foreach (ProtoPartResourceSnapshot r in part.resources)
+            {
+                if (r.definition.id != wasteId) continue;
+
+                double space = r.maxAmount - r.amount;
+                double added = Math.Min(space, remaining);
+                r.amount += added;
+                remaining -= added;
+                if (remaining <= epsilon) break;
+            }
         }
 
         /// <summary>
@@ -653,9 +1061,14 @@ namespace KickLifeSupport
         /// <param name="crewCount"></param>
         double CalculateCabinCO2(LifeSupportStatus status, int crewCount)
         {
-            if (cabinCO2 < 0) cabinCO2 = 0;
+            if (double.IsNaN(status.cabinCO2) || double.IsInfinity(status.cabinCO2))
+            {
+                status.cabinCO2 = 0;
+            }
+
+            if (status.cabinCO2 < 0) status.cabinCO2 = 0;
             if (crewCount > 0 && airPerSeat > 0)
-                return cabinCO2 / (float)(crewCount * airPerSeat);
+                return status.cabinCO2 / (float)(crewCount * airPerSeat);
             else
                 return 0;
         }
@@ -666,7 +1079,7 @@ namespace KickLifeSupport
         /// <param name="v"></param>
         /// <param name="status"></param>
         /// <param name="deltaTime"></param>
-        void RunClimateControl(Vessel v, LifeSupportStatus status, double deltaTime)
+        void RunClimateControl(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
         {
             if (!gameSettings.useCabinTempSystem)
             {
@@ -675,45 +1088,24 @@ namespace KickLifeSupport
 
             bool climateFailureDetected = false;
 
-            if (!v.loaded)
+            if (!ctx.loaded)
             {
-                foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
+                foreach (ProtoTemperaturePart p in ctx.protoTemperatureParts)
                 {
-                    if (p.partInfo == null || p.partInfo.partPrefab == null) continue;
-                    int capacity = p.partInfo.partPrefab.CrewCapacity;
-                    if (capacity == 0) continue;
+                    if (p.capacity == 0) continue;
 
-                    double ecRate = 0.03;
-                    bool isClimateOn = false;
-                    foreach (ProtoPartModuleSnapshot m in p.modules)
+                    if (!p.enabled)
                     {
-                        if (m.moduleName == "KickLifeSupportModule")
-                        {
-                            string val = m.moduleValues.GetValue("climateControlEnabled");
-                            if (val == null || (bool.TryParse(val, out bool bVal) && bVal))
-                            {
-                                isClimateOn = true;
-                            }
-
-                            val = m.moduleValues.GetValue("systemECRate");
-                            if (val != null) double.TryParse(val, out ecRate);
-
-                                break;
-                        }
-                    }
-
-                    if (!isClimateOn)
-                    {
-                        if (p.HasCrew(null))
+                        if (p.crew > 0)
                             climateFailureDetected = true;
                         continue;
                     }
 
-                    double ecReq = ecRate * capacity;
-                    (double amountConsumed, double ratio) ecRes = ConsumeResource(v, electricChargeId, ecReq);
+                    double ecReq = p.ecRate * p.capacity;
+                    (double amountConsumed, double ratio) ecRes = ConsumeResource(ctx.vessel, electricChargeId, ecReq);
                     if (ecRes.ratio < 0.99)
                     {
-                        if (p.HasCrew(null))
+                        if (p.crew > 0)
                             climateFailureDetected = true;
                     }
                 }
@@ -723,19 +1115,19 @@ namespace KickLifeSupport
             {
                 if (status.lsStatus == "Nominal")
                 {
-                    status.lsStatus = "Climate Control Failure";
+                    status.lsStatus = "Temp Control Failure";
                 }
             }
         }
 
-        void MonitorTemperature(Vessel v, LifeSupportStatus status, double deltaTime)
+        void MonitorTemperature(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
         {
             if (!gameSettings.useCabinTempSystem)
             {
                 return;
             }
 
-            if (!v.loaded)
+            if (!ctx.loaded)
             {
                 status.tempRangeTime = 0;
                 return;
@@ -743,8 +1135,7 @@ namespace KickLifeSupport
 
             bool tempIssueDetected = false;
 
-            List<KickLifeSupportModule> modules = v.FindPartModulesImplementing<KickLifeSupportModule>();
-            foreach (KickLifeSupportModule module in modules)
+            foreach (KickTemperatureControlModule module in ctx.temperatureModules)
             {
                 if (module.part.protoModuleCrew.Count == 0) continue;
 
@@ -769,38 +1160,35 @@ namespace KickLifeSupport
         /// <summary>
         /// Checks to see if the crew should die
         /// </summary>
-        void CheckConditions(LifeSupportStatus status, Vessel v)
+        void CheckConditions(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
         {
-            double co2Level = CalculateCabinCO2(status, GetCrewCapacity(v));
+            double co2Level = CalculateCabinCO2(status, ctx.cabinCapacity);
 
             // PRIORITY 0: Nominal
             status.lsStatus = "Nominal";
 
-            // PRIORITY 1: CO2 (Immediate Death)
-            if (co2Level >= co2Fatal)
+            if (co2Level >= co2Fatal && status.lowO2Time >= graceO2)
             {
-                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{v.vesselName}' killed by CO2. Level: {co2Level:P2} (Limit: {co2Fatal:P2})");
-                KillCrew(v);
-                status.lsStatus = "Fatal CO2 Levels";
-                return;
-            }
-            else if (co2Level >= co2Warning)
-            {
-                status.lsStatus = "Dangerous CO2 Levels";
+                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{ctx.vessel.vesselName}' suffocated (CO2). Time unable to breathe: {status.lowO2Time:F1}s (Limit: {graceO2:F1}s); Level: {co2Level:P2}");
+                KillCrew(ctx.vessel, "Crew lost to CO2 poisoning", $"Carbon dioxide concentration aboard {ctx.vessel.vesselName} reached fatal levels.");
+                status.lsStatus = $"CO2 High ({FormatRemainingTime(0)})";
                 return;
             }
 
-            // PRIORITY 2: Oxygen (Fast Death)
-            if (status.lowO2Time >= graceO2)
+            if (status.ambientExposureTime >= graceO2)
             {
-                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{v.vesselName}' suffocated (No O2). Time without Air: {status.lowO2Time:F1}s (Limit: {graceO2:F1}s)");
-                KillCrew(v);
-                status.lsStatus = "Crew suffocated!";
+                Debug.LogWarning($"[KICKLS] DEATH: Ambient-dependent crew on '{ctx.vessel.vesselName}' suffocated. Time without breathable ambient air: {status.ambientExposureTime:F1}s (Limit: {graceO2:F1}s)");
+                KillAmbientDependentCrew(ctx, "Crew lost to unbreathable ambient air", $"Crew in unpressurized compartments aboard {ctx.vessel.vesselName} were exposed to an unbreathable environment.");
+                status.lsStatus = $"No Ambient Air ({FormatRemainingTime(0)})";
+                status.ambientExposureTime = 0;
                 return;
             }
-            else if (status.lowO2Time > 0)
+
+            if (status.lowO2Time >= graceO2)
             {
-                status.lsStatus = $"Suffocating! ({graceO2 - status.lowO2Time:F0}s)";
+                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{ctx.vessel.vesselName}' suffocated (No O2). Time without Air: {status.lowO2Time:F1}s (Limit: {graceO2:F1}s)");
+                KillCrew(ctx.vessel, "Crew lost to oxygen deprivation", $"The crew aboard {ctx.vessel.vesselName} ran out of breathable atmosphere.");
+                status.lsStatus = $"No O2 ({FormatRemainingTime(0)})";
                 return;
             }
 
@@ -808,32 +1196,34 @@ namespace KickLifeSupport
             {
                 if (status.lowClimateTime >= graceClimate)
                 {
-                    Debug.LogWarning($"[KICKLS] DEATH: Crew on '{v.vesselName}' suffocated (Climate Control Failure). Time without Circulation: {status.lowClimateTime:F1}s (Limit: {graceClimate:F1}s)");
-                    KillCrew(v);
-                    status.lsStatus = "Crew suffocated from stagnant air!";
-                }
-                else if (status.lowClimateTime > 0)
-                {
-                    status.lsStatus = $"Air Circulation Failed! ({graceClimate - status.lowClimateTime:F0}s)";
+                    Debug.LogWarning($"[KICKLS] DEATH: Crew on '{ctx.vessel.vesselName}' suffocated (Temperature Control Failure). Time without Circulation: {status.lowClimateTime:F1}s (Limit: {graceClimate:F1}s)");
+                    KillCrew(ctx.vessel, "Crew lost to atmospheric control failure", $"Temperature control failed aboard {ctx.vessel.vesselName} long enough for the cabin environment to become fatal.");
+                    status.lsStatus = $"No O2 ({FormatRemainingTime(0)})";
+                    return;
                 }
 
                 if (status.tempRangeTime >= graceTemp)
                 {
-                    Debug.LogWarning($"[KICKLS] DEATH: Crew on '{v.vesselName}' froze/cooked. Time out of range: {status.tempRangeTime:F1}s (Limit: {graceTemp:F1}s); Current Temp: {status.lastCabinTemp:F0}C");
-                    KillCrew(v);
-                    status.lsStatus = "Fatal temperature!";
+                    Debug.LogWarning($"[KICKLS] DEATH: Crew on '{ctx.vessel.vesselName}' froze/cooked. Time out of range: {status.tempRangeTime:F1}s (Limit: {graceTemp:F1}s); Current Temp: {status.lastCabinTemp:F0}C");
+                    KillCrew(ctx.vessel, "Crew lost to cabin temperature", $"Cabin temperature aboard {ctx.vessel.vesselName} stayed outside survivable limits.");
+                    status.lsStatus = $"Hot ({FormatRemainingTime(0)})";
+                    return;
                 }
-                else if (status.tempRangeTime > 0)
-                {
-                    status.lsStatus = $"Cabin Temp Critical! ({graceClimate - status.tempRangeTime:F0}s)";
-                }
+            }
+
+            // PRIORITY 2: Oxygen and temperature can be shown together.
+            string dangerStatus = BuildTimedSituationStatus(status, co2Level);
+            if (!string.IsNullOrEmpty(dangerStatus))
+            {
+                status.lsStatus = dangerStatus;
+                return;
             }
 
             // PRIORITY 3: Water (Medium Death)
             if (status.lowWaterTime >= graceWater)
             {
-                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{v.vesselName}' died of dehydration. Time without Water: {status.lowWaterTime:F1}s (Limit: {graceWater:F1}s)");
-                KillCrew(v);
+                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{ctx.vessel.vesselName}' died of dehydration. Time without Water: {status.lowWaterTime:F1}s (Limit: {graceWater:F1}s)");
+                KillCrew(ctx.vessel, "Crew lost to dehydration", $"The crew aboard {ctx.vessel.vesselName} ran out of water.");
                 status.lsStatus = "Crew dehydrated!";
                 return;
             }
@@ -846,8 +1236,8 @@ namespace KickLifeSupport
             // PRIORITY 4: Food (Slow Death)
             if (status.lowFoodTime >= graceFood)
             {
-                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{v.vesselName}' starved to death. Time without Food: {status.lowFoodTime:F1}s (Limit: {graceFood:F1}s)");
-                KillCrew(v);
+                Debug.LogWarning($"[KICKLS] DEATH: Crew on '{ctx.vessel.vesselName}' starved to death. Time without Food: {status.lowFoodTime:F1}s (Limit: {graceFood:F1}s)");
+                KillCrew(ctx.vessel, "Crew lost to starvation", $"The crew aboard {ctx.vessel.vesselName} ran out of food.");
                 status.lsStatus = "Crew starved!";
                 return;
             }
@@ -1105,47 +1495,384 @@ namespace KickLifeSupport
 
         #region Crew Helpers
 
-        int GetLiveCrew(Vessel v)
-        {
-            // KSP API handles counting crew for both Loaded and Unloaded vessels automatically
-            return v.GetCrewCount();
-        }
-
-        int GetCrewCapacity(Vessel v)
+        bool VesselHasLifeSupportModules(Vessel v)
         {
             if (v.loaded)
             {
-                return v.GetCrewCapacity();
+                foreach (KickLifeSupportModule module in v.FindPartModulesImplementing<KickLifeSupportModule>())
+                {
+                    if (module.lifeSupportEnabled) return true;
+                }
+                return false;
+            }
+
+            foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
+            {
+                foreach (ProtoPartModuleSnapshot m in p.modules)
+                {
+                    if (m.moduleName == "KickLifeSupportModule" && IsLifeSupportModuleEnabled(m)) return true;
+                }
+            }
+            return false;
+        }
+
+        int GetLiveCrew(Vessel v)
+        {
+            int crew = 0;
+
+            if (v.loaded)
+            {
+                foreach (KickLifeSupportModule m in v.FindPartModulesImplementing<KickLifeSupportModule>())
+                {
+                    if (!m.lifeSupportEnabled) continue;
+                    crew += m.part.protoModuleCrew.Count;
+                }
             }
             else
             {
-                // For background ships, we must sum the capacity of the parts manually
-                int capacity = 0;
                 foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
                 {
-                    // partPrefab is the "Master Copy" of the part which holds the static stats
+                    if (!PartHasLifeSupportModule(p)) continue;
+                    crew += p.protoModuleCrew.Count;
+                }
+            }
+
+            return crew;
+        }
+
+        int GetCabinAtmosphereCapacity(Vessel v)
+        {
+            int capacity = 0;
+
+            if (v.loaded)
+            {
+                foreach (KickLifeSupportModule m in v.FindPartModulesImplementing<KickLifeSupportModule>())
+                {
+                    if (!m.lifeSupportEnabled) continue;
+                    capacity += m.part.CrewCapacity;
+                }
+            }
+            else
+            {
+                foreach (ProtoPartSnapshot p in v.protoVessel.protoPartSnapshots)
+                {
                     if (p.partInfo != null && p.partInfo.partPrefab != null)
                     {
-                        capacity += p.partInfo.partPrefab.CrewCapacity;
+                        foreach (ProtoPartModuleSnapshot m in p.modules)
+                        {
+                            if (m.moduleName != "KickLifeSupportModule") continue;
+                            if (!IsLifeSupportModuleEnabled(m)) continue;
+                            capacity += p.partInfo.partPrefab.CrewCapacity;
+                        }
                     }
                 }
-                return capacity;
+            }
+
+            return capacity;
+        }
+
+        bool PartHasLifeSupportModule(ProtoPartSnapshot part)
+        {
+            foreach (ProtoPartModuleSnapshot m in part.modules)
+            {
+                if (m.moduleName == "KickLifeSupportModule" && IsLifeSupportModuleEnabled(m)) return true;
+            }
+            return false;
+        }
+
+        bool IsLifeSupportModuleEnabled(ProtoPartModuleSnapshot module)
+        {
+            string value = module.moduleValues.GetValue("lifeSupportEnabled");
+            return value == null || !bool.TryParse(value, out bool enabled) || enabled;
+        }
+
+        int GetAtmosphereControlMode(ProtoPartModuleSnapshot module)
+        {
+            if (int.TryParse(module.moduleValues.GetValue("atmosphereControlMode"), out int mode))
+            {
+                return mode;
+            }
+
+            return KickLifeSupportModule.AtmosphereControlLiOH;
+        }
+
+        bool IsRegenerativeScrubber(int atmosphereControlMode)
+        {
+            return atmosphereControlMode == KickLifeSupportModule.AtmosphereControlRegenerativeScrubber ||
+                   atmosphereControlMode == KickLifeSupportModule.AtmosphereControlSolidAmine;
+        }
+
+        bool IsOpenLoopELSEnvironmentUsable(Vessel v)
+        {
+            if (v == null || v.mainBody == null) return false;
+            if (IsVesselUnderwater(v)) return false;
+            return v.staticPressurekPa >= OpenLoopELSPressureMinimumKPa;
+        }
+
+        bool IsOpenLoopELSEnvironmentUsable(VesselLifeSupportContext ctx)
+        {
+            if (ctx == null || ctx.vessel == null || ctx.vessel.mainBody == null) return false;
+            if (ctx.underwater) return false;
+            return ctx.vessel.staticPressurekPa >= OpenLoopELSPressureMinimumKPa;
+        }
+
+        string GetOpenLoopELSEnvironmentStatus(Vessel v)
+        {
+            if (IsVesselUnderwater(v)) return "Underwater";
+            return "Thin Atmo";
+        }
+
+        string GetOpenLoopELSEnvironmentStatus(VesselLifeSupportContext ctx)
+        {
+            if (ctx.underwater) return "Underwater";
+            return "Thin Atmo";
+        }
+
+        bool IsAtmosphericControlEnabled(ProtoPartModuleSnapshot module)
+        {
+            string value = module.moduleValues.GetValue("scrubberEnabled");
+            return value == null || !bool.TryParse(value, out bool enabled) || enabled;
+        }
+
+        double GetCabinOccupancyScale(Vessel v, LifeSupportStatus status, int cabinCapacity)
+        {
+            if (cabinCapacity <= 0) return 0;
+
+            int crew = GetLiveCrew(v);
+            if (crew <= 0) return 0;
+
+            return Math.Min((double)crew / cabinCapacity, 1.0);
+        }
+
+        bool IsAmbientAtmosphereSafe(Vessel v)
+        {
+            if (v == null || v.mainBody == null) return false;
+            if (!v.mainBody.atmosphereContainsOxygen) return false;
+            if (IsVesselUnderwater(v)) return false;
+            return v.staticPressurekPa >= AmbientPressureMinimumKPa;
+        }
+
+        bool IsVesselUnderwater(Vessel v)
+        {
+            return v != null && v.mainBody != null && v.mainBody.ocean && v.altitude < -0.5;
+        }
+
+        string GetAmbientAtmosphereStatus(Vessel v)
+        {
+            if (IsVesselUnderwater(v)) return "Underwater";
+            if (v == null || v.mainBody == null || !v.mainBody.atmosphereContainsOxygen) return "No O2 Atmo";
+            return IsAmbientAtmosphereSafe(v) ? "Safe Env" : "Thin Atmo";
+        }
+
+        string GetAmbientAtmosphereStatus(VesselLifeSupportContext ctx)
+        {
+            if (ctx.underwater) return "Underwater";
+            if (ctx.vessel == null || ctx.vessel.mainBody == null || !ctx.vessel.mainBody.atmosphereContainsOxygen) return "No O2 Atmo";
+            return ctx.ambientSafe ? "Safe Env" : "Thin Atmo";
+        }
+
+        string BuildTimedSituationStatus(LifeSupportStatus status, double co2Level)
+        {
+            List<SituationHazard> hazards = new List<SituationHazard>();
+
+            if (co2Level >= co2Warning)
+            {
+                if (co2Level >= co2Fatal)
+                {
+                    hazards.Add(new SituationHazard("CO2 High", graceO2 - status.lowO2Time));
+                }
+                else
+                {
+                    hazards.Add(new SituationHazard("CO2 High", -1));
+                }
+            }
+
+            double oxygenRemaining = -1;
+            if (status.lowO2Time >= graceO2)
+            {
+                oxygenRemaining = 0;
+            }
+            else if (status.lowO2Time > 0)
+            {
+                oxygenRemaining = graceO2 - status.lowO2Time;
+            }
+
+            if (gameSettings.useCabinTempSystem)
+            {
+                if (status.lowClimateTime >= graceClimate)
+                {
+                    oxygenRemaining = 0;
+                }
+                else if (status.lowClimateTime > 0)
+                {
+                    double climateRemaining = graceClimate - status.lowClimateTime;
+                    oxygenRemaining = oxygenRemaining < 0 ? climateRemaining : Math.Min(oxygenRemaining, climateRemaining);
+                }
+            }
+
+            if (oxygenRemaining >= 0)
+            {
+                hazards.Add(new SituationHazard("No O2", oxygenRemaining));
+            }
+
+            if (status.ambientExposureTime >= graceO2)
+            {
+                hazards.Add(new SituationHazard("No Ambient Air", 0));
+            }
+            else if (status.ambientExposureTime > 0)
+            {
+                hazards.Add(new SituationHazard("No Ambient Air", graceO2 - status.ambientExposureTime));
+            }
+
+            if (gameSettings.useCabinTempSystem)
+            {
+                if (status.tempRangeTime >= graceTemp)
+                {
+                    hazards.Add(new SituationHazard("Hot", 0));
+                }
+                else if (status.tempRangeTime > 0)
+                {
+                    hazards.Add(new SituationHazard("Hot", graceTemp - status.tempRangeTime));
+                }
+            }
+
+            if (hazards.Count == 0) return string.Empty;
+            if (hazards.Count == 1) return FormatHazard(hazards[0]);
+
+            double shortestTimer = double.MaxValue;
+            foreach (SituationHazard hazard in hazards)
+            {
+                if (hazard.remainingSeconds >= 0 && hazard.remainingSeconds < shortestTimer)
+                {
+                    shortestTimer = hazard.remainingSeconds;
+                }
+            }
+
+            return shortestTimer == double.MaxValue ? "SNAFU" : $"SNAFU ({FormatRemainingTime(shortestTimer)})";
+        }
+
+        string FormatHazard(SituationHazard hazard)
+        {
+            return hazard.remainingSeconds >= 0
+                ? $"{hazard.label} ({FormatRemainingTime(hazard.remainingSeconds)})"
+                : hazard.label;
+        }
+
+        string FormatRemainingTime(double seconds)
+        {
+            return KickUIFormat.Timer(seconds);
+        }
+
+        void CheckGraceAnnouncements(LifeSupportStatus status, Vessel v)
+        {
+            UpdateGraceAnnouncement(
+                status.lowO2Time > 0,
+                ref status.breathingGraceAnnounced,
+                v,
+                "KICK Life Support: breathable atmosphere failing",
+                $"{v.vesselName}: crew have {FormatRemainingTime(graceO2 - status.lowO2Time)} before oxygen deprivation becomes fatal.");
+
+            UpdateGraceAnnouncement(
+                status.ambientExposureTime > 0,
+                ref status.ambientGraceAnnounced,
+                v,
+                "KICK Life Support: ambient air unbreathable",
+                $"{v.vesselName}: unpressurized crew have {FormatRemainingTime(graceO2 - status.ambientExposureTime)} before exposure becomes fatal.");
+
+            UpdateGraceAnnouncement(
+                status.lowWaterTime > 0,
+                ref status.waterGraceAnnounced,
+                v,
+                "KICK Life Support: water unavailable",
+                $"{v.vesselName}: crew have {FormatRemainingTime(graceWater - status.lowWaterTime)} before dehydration becomes fatal.");
+
+            UpdateGraceAnnouncement(
+                status.lowFoodTime > 0,
+                ref status.foodGraceAnnounced,
+                v,
+                "KICK Life Support: food unavailable",
+                $"{v.vesselName}: crew have {FormatRemainingTime(graceFood - status.lowFoodTime)} before starvation becomes fatal.");
+
+            if (gameSettings.useCabinTempSystem)
+            {
+                UpdateGraceAnnouncement(
+                    status.lowClimateTime > 0,
+                    ref status.climateGraceAnnounced,
+                    v,
+                    "KICK Life Support: temperature control failing",
+                    $"{v.vesselName}: crew have {FormatRemainingTime(graceClimate - status.lowClimateTime)} before cabin circulation failure becomes fatal.");
+
+                UpdateGraceAnnouncement(
+                    status.tempRangeTime > 0,
+                    ref status.tempGraceAnnounced,
+                    v,
+                    "KICK Life Support: cabin temperature unsafe",
+                    $"{v.vesselName}: crew have {FormatRemainingTime(graceTemp - status.tempRangeTime)} before cabin temperature becomes fatal.");
+            }
+            else
+            {
+                status.climateGraceAnnounced = false;
+                status.tempGraceAnnounced = false;
             }
         }
 
-        void KillCrew(Vessel v)
+        void UpdateGraceAnnouncement(bool graceActive, ref bool alreadyAnnounced, Vessel v, string title, string message)
+        {
+            if (!graceActive)
+            {
+                alreadyAnnounced = false;
+                return;
+            }
+
+            if (alreadyAnnounced) return;
+            alreadyAnnounced = true;
+            if (v != FlightGlobals.ActiveVessel) return;
+            ScreenMessages.PostScreenMessage($"{title}\n{message}", 6f, ScreenMessageStyle.UPPER_CENTER);
+        }
+
+        void PostCrewDeathReport(string title, string message)
+        {
+            try
+            {
+                MessageSystem.Instance.AddMessage(new MessageSystem.Message(
+                    title,
+                    message,
+                    MessageSystemButton.MessageButtonColor.RED,
+                    MessageSystemButton.ButtonIcons.ALERT));
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[KICKLS] Failed to post crew death report: {ex.Message}");
+            }
+        }
+
+        struct SituationHazard
+        {
+            public readonly string label;
+            public readonly double remainingSeconds;
+
+            public SituationHazard(string label, double remainingSeconds)
+            {
+                this.label = label;
+                this.remainingSeconds = remainingSeconds;
+            }
+        }
+
+        void KillCrew(Vessel v, string reportTitle, string reportBody)
         {
             // 1. Get a copy of the crew list
             // (We need a copy because we are about to modify the vessel's crew list)
             List<ProtoCrewMember> crewList = new List<ProtoCrewMember>(v.GetVesselCrew());
 
             bool anyoneDied = false;
+            List<string> lostCrew = new List<string>();
 
             foreach (ProtoCrewMember crew in crewList)
             {
                 // 2. Mark them as Dead in the main roster
                 crew.rosterStatus = ProtoCrewMember.RosterStatus.Dead;
                 anyoneDied = true;
+                lostCrew.Add(crew.name);
 
                 // 3. Remove them from the vessel structure
                 if (v.loaded)
@@ -1187,6 +1914,65 @@ namespace KickLifeSupport
             if (anyoneDied && v.loaded)
             {
                 GameEvents.onVesselChange.Fire(v);
+            }
+
+            if (anyoneDied)
+            {
+                string names = lostCrew.Count > 0 ? string.Join(", ", lostCrew.ToArray()) : "Unknown crew";
+                PostCrewDeathReport(reportTitle, $"{reportBody}\n\nLost crew: {names}");
+            }
+        }
+
+        void KillAmbientDependentCrew(VesselLifeSupportContext ctx, string reportTitle, string reportBody)
+        {
+            if (ctx == null || ctx.vessel == null) return;
+
+            bool anyoneDied = false;
+            List<string> lostCrew = new List<string>();
+
+            if (ctx.loaded)
+            {
+                foreach (KickLifeSupportModule module in ctx.lifeSupportModules)
+                {
+                    if (module.atmosphereControlMode != KickLifeSupportModule.AtmosphereControlNone) continue;
+
+                    Part part = module.part;
+                    List<ProtoCrewMember> crewList = new List<ProtoCrewMember>(part.protoModuleCrew);
+                    foreach (ProtoCrewMember crew in crewList)
+                    {
+                        crew.rosterStatus = ProtoCrewMember.RosterStatus.Dead;
+                        part.RemoveCrewmember(crew);
+                        anyoneDied = true;
+                        lostCrew.Add(crew.name);
+                    }
+                }
+            }
+            else
+            {
+                foreach (ProtoLifeSupportPart record in ctx.protoLifeSupportParts)
+                {
+                    if (record.atmosphereControlMode != KickLifeSupportModule.AtmosphereControlNone) continue;
+
+                    List<ProtoCrewMember> crewList = new List<ProtoCrewMember>(record.part.protoModuleCrew);
+                    foreach (ProtoCrewMember crew in crewList)
+                    {
+                        crew.rosterStatus = ProtoCrewMember.RosterStatus.Dead;
+                        record.part.RemoveCrew(crew.name);
+                        anyoneDied = true;
+                        lostCrew.Add(crew.name);
+                    }
+                }
+            }
+
+            if (anyoneDied && ctx.vessel.loaded)
+            {
+                GameEvents.onVesselChange.Fire(ctx.vessel);
+            }
+
+            if (anyoneDied)
+            {
+                string names = lostCrew.Count > 0 ? string.Join(", ", lostCrew.ToArray()) : "Unknown crew";
+                PostCrewDeathReport(reportTitle, $"{reportBody}\n\nLost crew: {names}");
             }
         }
 

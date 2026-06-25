@@ -14,12 +14,20 @@ namespace KickLifeSupport
         public bool climateControlEnabled = true;
         public bool avionicsEnabled = true;
         public string scrubberStatus = "On";
+        public bool ambientAtmosphereUnderwater = false;
 
         public double lowO2Time = 0f;
+        public double ambientExposureTime = 0f;
         public double lowWaterTime = 0f;
         public double lowFoodTime = 0f;
         public double lowClimateTime = 0f;
         public double tempRangeTime = 0f;
+        public bool breathingGraceAnnounced = false;
+        public bool ambientGraceAnnounced = false;
+        public bool waterGraceAnnounced = false;
+        public bool foodGraceAnnounced = false;
+        public bool climateGraceAnnounced = false;
+        public bool tempGraceAnnounced = false;
 
         /// <summary>
         /// The cabin temp reported when outside of the "safe" range.
@@ -33,10 +41,15 @@ namespace KickLifeSupport
 
         public double lastUpdateTime = 0;
 
-        public double lastCDRAScrubAmount = 0f;
+        public double lastRegenerativeScrubAmount = 0f;
         public double lastLiOHScrubAmount = 0f;
-        public int activeCDRAScrubberCount = 0;
+        public double activeOpenLoopELSVentCapacity = 0f;
+        public double activeRegenerativeScrubberSystemCapacity = 0f;
+        public double activeLiOHSystemCapacity = 0f;
+        public int activeRegenerativeScrubberCount = 0;
         public int activeLiOHScrubberCount = 0;
+        public bool ambientAtmosphereUnsafe = false;
+        public int ambientDependentCrew = 0;
 
         public void Save(ConfigNode node)
         {
@@ -45,10 +58,17 @@ namespace KickLifeSupport
             node.AddValue("ClimateControlEnabled", climateControlEnabled);
             node.AddValue("AvionicsEnabled", avionicsEnabled);
             node.AddValue("LowO2Time", lowO2Time);
+            node.AddValue("AmbientExposureTime", ambientExposureTime);
             node.AddValue("LowWaterTime", lowWaterTime);
             node.AddValue("LowFoodTime", lowFoodTime);
             node.AddValue("LowClimateTime", lowClimateTime);
             node.AddValue("TempRangeTime", tempRangeTime);
+            node.AddValue("BreathingGraceAnnounced", breathingGraceAnnounced);
+            node.AddValue("AmbientGraceAnnounced", ambientGraceAnnounced);
+            node.AddValue("WaterGraceAnnounced", waterGraceAnnounced);
+            node.AddValue("FoodGraceAnnounced", foodGraceAnnounced);
+            node.AddValue("ClimateGraceAnnounced", climateGraceAnnounced);
+            node.AddValue("TempGraceAnnounced", tempGraceAnnounced);
         }
 
         public void Load(ConfigNode node)
@@ -58,10 +78,17 @@ namespace KickLifeSupport
             bool.TryParse(node.GetValue("ClimateControlEnabled"), out climateControlEnabled);
             bool.TryParse(node.GetValue("AvionicsEnabled"), out avionicsEnabled);
             double.TryParse(node.GetValue("LowO2Time"), out lowO2Time);
+            double.TryParse(node.GetValue("AmbientExposureTime"), out ambientExposureTime);
             double.TryParse(node.GetValue("LowWaterTime"), out lowWaterTime);
             double.TryParse(node.GetValue("LowFoodTime"), out lowFoodTime);
             double.TryParse(node.GetValue("LowClimateTime"), out lowClimateTime);
             double.TryParse(node.GetValue("TempRangeTime"), out tempRangeTime);
+            bool.TryParse(node.GetValue("BreathingGraceAnnounced"), out breathingGraceAnnounced);
+            bool.TryParse(node.GetValue("AmbientGraceAnnounced"), out ambientGraceAnnounced);
+            bool.TryParse(node.GetValue("WaterGraceAnnounced"), out waterGraceAnnounced);
+            bool.TryParse(node.GetValue("FoodGraceAnnounced"), out foodGraceAnnounced);
+            bool.TryParse(node.GetValue("ClimateGraceAnnounced"), out climateGraceAnnounced);
+            bool.TryParse(node.GetValue("TempGraceAnnounced"), out tempGraceAnnounced);
         }
     }
 }

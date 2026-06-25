@@ -6,6 +6,8 @@
 - Added optional Dynamic Battery Storage reporting for continuous capsule systems EC draw.
 - Balanced Regenerative CDRA mass and cost as a crew-capacity-scaled upgrade.
 - Excluded external command seats from cabin life-support patches.
+- Added No Atmospheric Control as an ambient-air-only atmospheric control option.
+- Moved LiOH Scrubbers behind the Survivability tech node and made No Atmospheric Control the default.
 
 ## (v0.1.3) 5/20/2026
 ### Bug Fixes
