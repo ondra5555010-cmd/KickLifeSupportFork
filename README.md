@@ -42,10 +42,10 @@ SAS and RCS also have independent electronics that are on when they are enabled 
 - [ModuleManager 4.2.3](https://forum.kerbalspaceprogram.com/topic/50533-18x-112x-module-manager-423-july-03th-2023-fireworks-season/)
 - [B9 Part Switch](https://github.com/blowfishpro/B9PartSwitch)
 - [Community Resource Pack](https://github.com/UmbraSpaceIndustries/CommunityResourcePack/releases)
+- [System Heat](https://forum.kerbalspaceprogram.com/topic/193909-112x-systemheat-a-replacement-for-the-coreheat-system-july-21/)
 ## Compatibility/Recommended Mods
 - [Real Fuels](https://forum.kerbalspaceprogram.com/topic/58236-18-real-fuels/)
 - [Universal Storage 2](https://spacedock.info/mod/2960/Universal%20Storage%20II%20Finalized)
-- [System Heat](https://forum.kerbalspaceprogram.com/topic/193909-112x-systemheat-a-replacement-for-the-coreheat-system-july-21/)
 - [Dynamic Battery Storage](https://github.com/post-kerbin-mining-corporation/DynamicBatteryStorage) - optional EC planning and high-warp buffer support for capsule systems.
 ## Known Bugs
 - Scrubber heat generation is currently much lower than intended due to a calculation bug. This will be fixed in a future update.

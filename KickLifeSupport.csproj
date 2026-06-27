@@ -24,6 +24,10 @@
       <HintPath>Libs\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="SystemHeat">
+      <HintPath>Libs\SystemHeat.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

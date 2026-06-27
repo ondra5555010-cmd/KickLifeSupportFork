@@ -18,6 +18,7 @@ namespace KickLifeSupport
 
         public double lowO2Time = 0f;
         public double ambientExposureTime = 0f;
+        public double ambientExposureRemaining = -1f;
         public double lowWaterTime = 0f;
         public double lowFoodTime = 0f;
         public double lowClimateTime = 0f;
@@ -43,6 +44,7 @@ namespace KickLifeSupport
 
         public double lastRegenerativeScrubAmount = 0f;
         public double lastLiOHScrubAmount = 0f;
+        public double lastOpenLoopVentedAmount = 0f;
         public double activeOpenLoopELSVentCapacity = 0f;
         public double activeRegenerativeScrubberSystemCapacity = 0f;
         public double activeLiOHSystemCapacity = 0f;

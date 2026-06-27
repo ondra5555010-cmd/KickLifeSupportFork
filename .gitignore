@@ -370,3 +370,5 @@ FodyWeavers.xsd
 /Libs/UnityEngine.dll
 /Libs/UnityEngine.IMGUIModule.dll
 /Libs/Assembly-CSharp.dll
+/Libs/SystemHeat.dll
+/Libs/SystemHeatReference.cs
