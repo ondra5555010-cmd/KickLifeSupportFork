@@ -56,6 +56,7 @@ namespace KickLifeSupport
             public bool ambientSafe;
             public bool underwater;
             public double occupancyScale;
+            public bool unattendedCO2Purge;
             public readonly List<KickLifeSupportModule> lifeSupportModules = new List<KickLifeSupportModule>();
             public readonly List<ProtoLifeSupportPart> protoLifeSupportParts = new List<ProtoLifeSupportPart>();
             public readonly List<ScrubberContribution> scrubberContributions = new List<ScrubberContribution>();
@@ -194,6 +195,9 @@ namespace KickLifeSupport
             {
                 if (!IsPotentialLifeSupportVessel(v)) continue;
 
+                VesselLifeSupportContext ctx = BuildContext(v, currentTime);
+                if (ctx == null) continue;
+
                 LifeSupportStatus data = GetData(v.id);
 
                 // Initialize
@@ -210,11 +214,29 @@ namespace KickLifeSupport
                 // If time went backwards or there was a big spike, reset.
                 if (deltaTime < 0) return;
 
-                VesselLifeSupportContext ctx = BuildContext(v, currentTime);
-                if (ctx == null) continue;
-
                 data.lastUpdateTime = currentTime;
                 data.cabinCO2 = ctx.cabinCO2;
+
+                if (ctx.liveCrew == 0)
+                {
+                    ResetCrewHazardState(data);
+                    ResetAtmosphericControlRuntime(ctx);
+                    if (ctx.unattendedCO2Purge)
+                    {
+                        ProcessOpenLoopELS(ctx, data, deltaTime);
+                        RunScrubber(
+                            ctx,
+                            data,
+                            deltaTime,
+                            co2Warning * ctx.cabinAirVolume);
+                    }
+
+                    if (ctx.cabinCapacity > 0)
+                    {
+                        SetCabinCO2(ctx, data.cabinCO2);
+                    }
+                    continue;
+                }
 
                 /*
                 if (v == FlightGlobals.ActiveVessel)
@@ -263,8 +285,7 @@ namespace KickLifeSupport
                 vessel.vesselType == VesselType.SpaceObject ||
                 vessel.vesselType == VesselType.Unknown ||
                 vessel.vesselType == VesselType.EVA ||
-                vessel.state == Vessel.State.DEAD ||
-                vessel.GetCrewCount() == 0)
+                vessel.state == Vessel.State.DEAD)
             {
                 return false;
             }
@@ -299,6 +320,7 @@ namespace KickLifeSupport
             ctx.ambientSafe = IsAmbientAtmosphereSafe(vessel);
             ctx.underwater = IsVesselUnderwater(vessel);
             ctx.occupancyScale = 0;
+            ctx.unattendedCO2Purge = false;
             ctx.lifeSupportModules.Clear();
             ctx.protoLifeSupportParts.Clear();
             ctx.scrubberContributions.Clear();
@@ -351,13 +373,41 @@ namespace KickLifeSupport
 
             if (ctx.loaded && ctx.lifeSupportModules.Count == 0) return null;
             if (!ctx.loaded && ctx.protoLifeSupportParts.Count == 0) return null;
-            if (ctx.liveCrew == 0) return null;
 
             double usableScrubberCapacity = GetUsableScrubberCapacity(ctx);
+            if (ctx.liveCrew == 0)
+            {
+                double co2Level = ctx.cabinAirVolume > 0
+                    ? ctx.cabinCO2 / ctx.cabinAirVolume
+                    : 0;
+                ctx.unattendedCO2Purge =
+                    usableScrubberCapacity > 0 &&
+                    co2Level > co2Warning;
+                ctx.occupancyScale = ctx.unattendedCO2Purge ? 1.0 : 0.0;
+                return ctx;
+            }
+
             ctx.occupancyScale = usableScrubberCapacity > 0
                 ? Math.Min(ctx.pressurizedCrew / usableScrubberCapacity, 1.0)
                 : 0.0;
             return ctx;
+        }
+
+        void ResetCrewHazardState(LifeSupportStatus status)
+        {
+            status.lowO2Time = 0;
+            status.ambientExposureTime = 0;
+            status.ambientExposureRemaining = -1;
+            status.lowWaterTime = 0;
+            status.lowFoodTime = 0;
+            status.lowClimateTime = 0;
+            status.tempRangeTime = 0;
+            status.breathingGraceAnnounced = false;
+            status.ambientGraceAnnounced = false;
+            status.waterGraceAnnounced = false;
+            status.foodGraceAnnounced = false;
+            status.climateGraceAnnounced = false;
+            status.tempGraceAnnounced = false;
         }
 
         internal bool TryGetVesselCabinMetrics(
@@ -1009,7 +1059,11 @@ namespace KickLifeSupport
         /// <param name="deltaTime"></param>
         /// <param name="totalCrewOnShip"></param>
         /// <remarks>This whole method needs a rewrite, but a good one.</remarks>
-        void RunScrubber(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
+        void RunScrubber(
+            VesselLifeSupportContext ctx,
+            LifeSupportStatus status,
+            double deltaTime,
+            double retainedCO2Floor = 0)
         {
             double totalRegenerativeRemoved = 0;
             double totalLiOHRemoved = 0;
@@ -1024,7 +1078,8 @@ namespace KickLifeSupport
 
             // Rates per seat
             double baseScrubRate = scrubberRequestRate * deltaTime;
-            double availableCO2 = Math.Max(status.cabinCO2, 0);
+            double availableCO2 =
+                Math.Max(status.cabinCO2 - Math.Max(retainedCO2Floor, 0), 0);
             double lithiumHydroxidePerCO2 = scrubberRequestRate > epsilon ? lithiumHydroxideRequestRate / scrubberRequestRate : 0;
             if (ctx.loaded)
             {
