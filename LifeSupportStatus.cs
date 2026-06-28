@@ -13,7 +13,6 @@ namespace KickLifeSupport
         public bool scrubberEnabled = true;
         public bool climateControlEnabled = true;
         public bool avionicsEnabled = true;
-        public string scrubberStatus = "On";
         public bool ambientAtmosphereUnderwater = false;
 
         public double lowO2Time = 0f;
