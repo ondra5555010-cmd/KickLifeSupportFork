@@ -1,11 +1,10 @@
+using System.Reflection;
 using UnityEngine;
 
 namespace KickLifeSupport
 {
     public partial class KickLifeSupportModule : PartModule
     {
-        private const float UpdateInterval = 5f;
-
         #region Persistent Fields
         [KSPField(isPersistant = true)]
         public float lowO2Time = 0f;
@@ -24,11 +23,6 @@ namespace KickLifeSupport
         int o2Id = -1;
         #endregion
 
-        /// <summary>
-        /// The amount of air (in liters) available per kerbal.
-        /// </summary>
-        internal const double airPerSeat = 2000;
-
         public const int AtmosphereControlNone = 0;
         public const int AtmosphereControlPressurizedCabin = 1;
         public const int AtmosphereControlOpenLoopELS = 2;
@@ -36,8 +30,6 @@ namespace KickLifeSupport
         public const int AtmosphereControlRegenerativeScrubber = 4;
         public const int AtmosphereControlSolidAmine = 5;
         public const int AtmosphereControlPartiallyPressurizedCabin = 6;
-
-        internal const double liohReactionHeatPerUnit = 4.0;
 
         #region Module Fields
         [KSPField]
@@ -52,38 +44,71 @@ namespace KickLifeSupport
         [KSPField(isPersistant = true)]
         public float atmosphericControlHeatPerEC = 1f;
 
+        [KSPField]
+        public float openLoopAtmosphericControlECRate = 0.005f;
+
+        [KSPField]
+        public float liohAtmosphericControlECRate = 0.05f;
+
+        [KSPField]
+        public float zeoliteAtmosphericControlECRate = 0.2f;
+
+        [KSPField]
+        public float solidAmineAtmosphericControlECRate = 0.1f;
+
+        [KSPField]
+        public float poweredAtmosphericControlHeatPerEC = 1f;
+
+        [KSPField]
+        public float cabinMassFraction = 0.05f;
+
+        [KSPField]
+        public float airVolumePerSeat = 2000f;
+
+        [KSPField]
+        public float pressurizedCabinPartConductance = 0.001f;
+
+        [KSPField]
+        public float partiallyPressurizedCabinPartConductance = 0.01f;
+
+        [KSPField]
+        public float unpressurizedCabinPartConductance = 0.1f;
+
+        [KSPField]
+        public float openLoopOxygenMultiplier = 10f;
+
         [KSPField(isPersistant = true)]
         public float pressureExposureTime = 0f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Installed System", groupName = "KICKATM", groupDisplayName = "Atmospheric Control")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Installed System", groupName = "KICKATM", groupDisplayName = "AtCon")]
         public string installedAtmosphereControl = "Unpressurized Cabin";
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Situation Report", groupName = "KICKATM", groupDisplayName = "Atmospheric Control")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Situation Report", groupName = "KICKATM", groupDisplayName = "AtCon")]
         public string lsStatus = "Nominal";
 
         //[KSPField(isPersistant = true, guiActive = true, guiActiveEditor = false, guiName = "Cabin Pressure", groupName = "KICKLS", groupDisplayName = "Life Support", guiFormat = "F1", guiUnits = " kPa")]
         public float cabinPressure = 101.325f;  // pressure in kPa
         // TODO: Implement cabin pressure simulation
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Master Switch", groupName = "KICKATM", groupDisplayName = "Atmospheric Control"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Master Switch", groupName = "KICKATM", groupDisplayName = "AtCon"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool scrubberEnabled = true;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "System Report", groupName = "KICKATM", groupDisplayName = "Atmospheric Control")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "System Report", groupName = "KICKATM", groupDisplayName = "AtCon")]
         public string scrubberStatus = "On";
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "CO2 Level", groupName = "KICKATM", groupDisplayName = "Atmospheric Control", guiFormat = "P1")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "CO2 Level", groupName = "KICKATM", groupDisplayName = "AtCon", guiFormat = "P1")]
         public float co2Level = 0f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "CO2 Warning", groupName = "KICKATM", groupDisplayName = "Atmospheric Control")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "CO2 Warning", groupName = "KICKATM", groupDisplayName = "AtCon")]
         public string co2WarningReport = "";
 
-        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "LiOH Use", groupName = "KICKATM", groupDisplayName = "Atmospheric Control", guiFormat = "F5", guiUnits = " /s")]
+        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "LiOH Use", groupName = "KICKATM", groupDisplayName = "AtCon", guiFormat = "F5", guiUnits = " /s")]
         public float liohUseDisplay = 0f;
 
-        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "LiOH Heat", groupName = "KICKATM", groupDisplayName = "Atmospheric Control", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "LiOH Heat", groupName = "KICKATM", groupDisplayName = "AtCon", guiFormat = "F3", guiUnits = " kW")]
         public float liohHeatDisplay = 0f;
 
-        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "Oxygen Waste", groupName = "KICKATM", groupDisplayName = "Atmospheric Control", guiFormat = "F5", guiUnits = " /s")]
+        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "Oxygen Waste", groupName = "KICKATM", groupDisplayName = "AtCon", guiFormat = "F5", guiUnits = " /s")]
         public float oxygenWasteDisplay = 0f;
 
         [KSPField(guiActive = false, guiActiveEditor = false, guiName = "Food")]
@@ -94,6 +119,9 @@ namespace KickLifeSupport
 
         [KSPField]
         public float dbsLifeSupportECRate = 0f;
+
+        [KSPField]
+        public float dbsTotalECRate = 0f;
         #endregion
 
         public double currentHeatFlux = 0;
@@ -106,6 +134,11 @@ namespace KickLifeSupport
 
         bool partActionWindowInitialized = false;
         int lastAtmosphereControlMode = -1;
+        PartModule atmosphericControlSwitch;
+        PartModule thermalControlSwitch;
+        PropertyInfo b9CurrentSubtypeNameProperty;
+        string lastAtmosphericControlSubtype;
+        string lastThermalControlSubtype;
 
         public override void OnStart(StartState state)
         {
@@ -118,22 +151,41 @@ namespace KickLifeSupport
             PartResourceDefinition o2Def = PartResourceLibrary.Instance.GetDefinition("Oxygen");
             if (o2Def != null) o2Id = o2Def.id;
 
+            SyncB9Selections();
             RefreshScrubberControls();
             UpdateDBSLifeSupportECRate();
+            ThermalOnStart(state);
+            UpdateDBSTotalECRate();
+        }
+
+        public void Start()
+        {
+            SyncB9Selections();
+            SyncSystemHeatAvailability();
+            RefreshScrubberControls();
+            RefreshCapabilityControls();
+            UpdateDBSLifeSupportECRate();
+            UpdateDBSTemperatureControlECRate();
+            UpdateDBSTotalECRate();
         }
 
         public override void OnUpdate()
         {
             RefreshScrubberControls();
             UpdateDBSLifeSupportECRate();
+            ThermalOnUpdate();
+            UpdateDBSTotalECRate();
         }
 
         public void Update()
         {
             if (!HighLogic.LoadedSceneIsEditor) return;
 
+            SyncB9Selections();
             RefreshScrubberControls();
             UpdateDBSLifeSupportECRate();
+            ThermalUpdate();
+            UpdateDBSTotalECRate();
         }
 
         public void FixedUpdate()
@@ -143,8 +195,6 @@ namespace KickLifeSupport
             LifeSupportStatus data = null;
             if (lifeSupportEnabled && KickLifeSupportScenario.Instance != null)
                 data = KickLifeSupportScenario.Instance.GetData(vessel.id);
-            else if (lifeSupportEnabled)
-                return;
 
             double dt = TimeWarp.fixedDeltaTime;
             currentHeatFlux = 0;
@@ -155,7 +205,7 @@ namespace KickLifeSupport
 
             UpdateDBSLifeSupportECRate();
 
-            if (lifeSupportEnabled)
+            if (lifeSupportEnabled && data != null)
             {
                 // Scrubber
                 if (atmosphereControlMode == AtmosphereControlNone)
@@ -172,7 +222,9 @@ namespace KickLifeSupport
 
                     if (data.lastLiOHScrubAmount > 0 && data.activeLiOHScrubberCount > 0 && dt > 0)
                     {
-                        currentLiOHReactionHeatFlux += (data.lastLiOHScrubAmount / data.activeLiOHScrubberCount / dt) * liohReactionHeatPerUnit;
+                        currentLiOHReactionHeatFlux +=
+                            (data.lastLiOHScrubAmount / data.activeLiOHScrubberCount / dt) *
+                            KickLifeSupportConfig.GetDouble("LIOH_REACTION_HEAT_PER_UNIT", 4.0);
                         currentLiOHConsumptionRate =
                             (data.lastLiOHScrubAmount / data.activeLiOHScrubberCount / dt) *
                             KickLifeSupportScenario.Instance.LithiumHydroxidePerCO2;
@@ -191,7 +243,8 @@ namespace KickLifeSupport
                                 GetDBSCapacityEstimate() /
                                 data.activeOpenLoopELSVentCapacity /
                                 dt) *
-                            KickLifeSupportScenario.Instance.OpenLoopExtraOxygenPerCO2;
+                            KickLifeSupportScenario.Instance.GetOpenLoopExtraOxygenPerCO2(
+                                openLoopOxygenMultiplier);
                     }
                 }
             }
@@ -201,20 +254,143 @@ namespace KickLifeSupport
             liohHeatDisplay = (float)currentLiOHReactionHeatFlux;
             oxygenWasteDisplay = (float)currentOpenLoopOxygenWasteRate;
 
-            if (lifeSupportEnabled)
+            if (lifeSupportEnabled && data != null)
             {
                 bool isolatedPartialCabin =
                     UsesPartialPressurization(atmosphereControlMode) &&
                     !IsPartialPressureUsable();
                 double displayedCO2 = isolatedPartialCabin ? cabinCO2 : data.cabinCO2;
-                int cabinCapacity = isolatedPartialCabin
-                    ? Mathf.Max(part.CrewCapacity, 1)
-                    : GetVesselCabinAtmosphereCapacity(vessel);
-                co2Level = cabinCapacity > 0 ? (float)(displayedCO2 / (cabinCapacity * airPerSeat)) : 0f;
+                double cabinAirVolume = isolatedPartialCabin
+                    ? Mathf.Max(part.CrewCapacity, 1) * Mathf.Max(airVolumePerSeat, 0f)
+                    : GetVesselCabinAirVolume(vessel);
+                co2Level = cabinAirVolume > 0
+                    ? (float)(displayedCO2 / cabinAirVolume)
+                    : 0f;
                 if (float.IsNaN(co2Level) || float.IsInfinity(co2Level)) co2Level = 0f;
                 RefreshStatusReports(data, co2Level, part.protoModuleCrew.Count);
             }
 
+            ThermalFixedUpdate();
+            UpdateDBSTotalECRate();
+        }
+
+        void UpdateDBSTotalECRate()
+        {
+            dbsTotalECRate = dbsLifeSupportECRate + dbsTemperatureControlECRate;
+        }
+
+        void SyncB9Selections()
+        {
+            string atmosphereSubtype = GetB9SubtypeName(
+                ref atmosphericControlSwitch,
+                "kickLSScrubberSwitch");
+            if (atmosphereSubtype != null &&
+                atmosphereSubtype != lastAtmosphericControlSubtype)
+            {
+                lastAtmosphericControlSubtype = atmosphereSubtype;
+                ApplyAtmosphericControlSubtype(atmosphereSubtype);
+            }
+
+            string thermalSubtype = GetB9SubtypeName(
+                ref thermalControlSwitch,
+                "kickThermalControlSwitch");
+            if (thermalSubtype != null &&
+                thermalSubtype != lastThermalControlSubtype)
+            {
+                lastThermalControlSubtype = thermalSubtype;
+                ApplyThermalControlSubtype(thermalSubtype);
+            }
+        }
+
+        string GetB9SubtypeName(ref PartModule cachedSwitch, string switchModuleID)
+        {
+            if (part == null) return null;
+
+            if (cachedSwitch == null || cachedSwitch.part != part)
+            {
+                foreach (PartModule module in part.Modules)
+                {
+                    if (module.moduleName == "ModuleB9PartSwitch" &&
+                        GetB9ModuleID(module) == switchModuleID)
+                    {
+                        cachedSwitch = module;
+                        break;
+                    }
+                }
+            }
+
+            if (cachedSwitch == null) return null;
+
+            if (b9CurrentSubtypeNameProperty == null)
+            {
+                b9CurrentSubtypeNameProperty = cachedSwitch.GetType().GetProperty(
+                    "CurrentSubtypeName",
+                    BindingFlags.Instance | BindingFlags.Public);
+            }
+
+            return b9CurrentSubtypeNameProperty?.GetValue(cachedSwitch, null) as string;
+        }
+
+        string GetB9ModuleID(PartModule module)
+        {
+            FieldInfo moduleIDField = module?.GetType().GetField(
+                "moduleID",
+                BindingFlags.Instance | BindingFlags.Public);
+            return moduleIDField?.GetValue(module) as string;
+        }
+
+        void ApplyAtmosphericControlSubtype(string subtype)
+        {
+            switch (subtype)
+            {
+                case "UnpressurizedCabin":
+                    SetAtmosphericControlConfiguration(AtmosphereControlNone, 0, 0);
+                    break;
+                case "PartiallyPressurizedCabin":
+                    SetAtmosphericControlConfiguration(AtmosphereControlPartiallyPressurizedCabin, 0, 0);
+                    break;
+                case "OpenLoopVenting":
+                    SetAtmosphericControlConfiguration(
+                        AtmosphereControlOpenLoopELS,
+                        openLoopAtmosphericControlECRate,
+                        poweredAtmosphericControlHeatPerEC);
+                    break;
+                case "PressurizedCabin":
+                    SetAtmosphericControlConfiguration(AtmosphereControlPressurizedCabin, 0, 0);
+                    break;
+                case "LiOH":
+                    SetAtmosphericControlConfiguration(
+                        AtmosphereControlLiOH,
+                        liohAtmosphericControlECRate,
+                        poweredAtmosphericControlHeatPerEC);
+                    break;
+                case "Zeolite":
+                    SetAtmosphericControlConfiguration(
+                        AtmosphereControlRegenerativeScrubber,
+                        zeoliteAtmosphericControlECRate,
+                        poweredAtmosphericControlHeatPerEC);
+                    break;
+                case "SolidAmine":
+                    SetAtmosphericControlConfiguration(
+                        AtmosphereControlSolidAmine,
+                        solidAmineAtmosphericControlECRate,
+                        poweredAtmosphericControlHeatPerEC);
+                    break;
+            }
+        }
+
+        void SetAtmosphericControlConfiguration(int mode, float ecRate, float heatPerEC)
+        {
+            atmosphereControlMode = mode;
+            atmosphericControlECRate = ecRate;
+            atmosphericControlHeatPerEC = heatPerEC;
+        }
+
+        void ApplyThermalControlSubtype(string subtype)
+        {
+            heatPumpAvailable = subtype == "HeatPump";
+            waterEvaporatorAvailable = subtype == "WaterEvaporator";
+            airCoolingAvailable = subtype == "AirCooling";
         }
 
         #region Scrubber Handling
@@ -257,11 +433,7 @@ namespace KickLifeSupport
 
         void UpdateMasterSwitchLabel()
         {
-            double ecRate = HighLogic.LoadedSceneIsEditor
-                ? dbsLifeSupportECRate
-                : currentAtmosphericControlECRate;
-            string usage = ecRate < 0.0005 ? "0 EC/s" : $"{ecRate:F3} EC/s";
-            Fields["scrubberEnabled"].guiName = $"Master Switch ({usage})";
+            Fields["scrubberEnabled"].guiName = "CO2 Removal";
         }
 
         string GetAtmosphericControlDisplayName()
@@ -484,7 +656,7 @@ namespace KickLifeSupport
         /// <summary>
         /// Allows the user to replace the lithium hydroxide canister
         /// </summary>
-        [KSPEvent(guiActive = true, guiName = "Reload Scrubber", groupName = "KICKATM", groupDisplayName = "Atmospheric Control")]
+        [KSPEvent(guiActive = true, guiName = "Reload Scrubber", groupName = "KICKATM", groupDisplayName = "AtCon")]
         public void ReloadScrubber()
         {
             string cartridgePartName = "KickLSLiOHCartridge";
@@ -577,18 +749,28 @@ namespace KickLifeSupport
         #endregion
 
         #region Cabin Helpers
-        private int GetVesselCabinAtmosphereCapacity(Vessel v)
+        private double GetVesselCabinAirVolume(Vessel v)
         {
-            int capacity = 0;
+            if (KickLifeSupportScenario.Instance != null &&
+                KickLifeSupportScenario.Instance.TryGetVesselCabinMetrics(
+                    v,
+                    out double cachedAirVolume,
+                    out _))
+            {
+                return cachedAirVolume;
+            }
+
+            double volume = 0;
             foreach (KickLifeSupportModule module in v.FindPartModulesImplementing<KickLifeSupportModule>())
             {
                 if (!module.lifeSupportEnabled) continue;
                 if (module.atmosphereControlMode == AtmosphereControlNone) continue;
                 if (UsesPartialPressurization(module.atmosphereControlMode) &&
                     !module.IsPartialPressureUsable()) continue;
-                capacity += module.part.CrewCapacity;
+
+                volume += module.part.CrewCapacity * Mathf.Max(module.airVolumePerSeat, 0f);
             }
-            return capacity;
+            return volume;
         }
         #endregion
 
@@ -630,6 +812,15 @@ namespace KickLifeSupport
         float GetDBSOccupancyScale()
         {
             if (!HighLogic.LoadedSceneIsFlight || vessel == null) return 1f;
+
+            if (KickLifeSupportScenario.Instance != null &&
+                KickLifeSupportScenario.Instance.TryGetVesselCabinMetrics(
+                    vessel,
+                    out _,
+                    out float cachedOccupancyScale))
+            {
+                return cachedOccupancyScale;
+            }
 
             int totalCrew = 0;
             int totalScrubberCapacity = 0;

@@ -18,7 +18,7 @@ To eliminate `CarbonDioxide`, a Command Pod is equipped with either a Lithium Hy
 -The CDRA pulls cabin air through a pair of beds that collect CO2, then the beds have to be heated to release the CO2 and send it overboard (or to a tank if you plan to collect it). The CDRA uses a lot of power but generates less heat.
 ***The CDRA is new, and a bug fix adjusted some of the thermal generation for LiOH scrubbers. The existing settings for EC consumption and heat generation are very untested and potentially unbalanced. If you have any problems, please let me know.***
 ### Temperature Control
-Space is cold, and without something generating heat, the cabin temperature can drop dangerously low. Luckily, a spacecraft is just chock full of heat sources. For one, Kerbals themselves generate body heat. The CO2 scrubber also generates heat when it's in use. Command Pod electronics also generate heat, such as the avionics package, the SAS and RCS computers, and even the environmental control system itself. A cabin heater is used in combination with a thermostat to keep the cabin at a comfortable 22 degrees Celsius. If the temperature climbs dangerously high, radiators can be automatically deployed.
+Space is cold, and without something generating heat, the cabin temperature can drop dangerously low. Luckily, a spacecraft is just chock full of heat sources. For one, Kerbals themselves generate body heat. The CO2 scrubber also generates heat when it is in use. Command Pod electronics also generate heat, such as the avionics package, the SAS and RCS computers, and even the environmental control system itself. A cabin heater works with the thermostat to keep the cabin comfortable, while water evaporators, atmospheric cooling, or a System Heat coolant loop can remove excess heat.
 ### ElectricCharge and Electronics
 Almost everything onboard that is part of the life support system requires EC to run it.
 
@@ -47,8 +47,6 @@ SAS and RCS also have independent electronics that are on when they are enabled 
 - [Real Fuels](https://forum.kerbalspaceprogram.com/topic/58236-18-real-fuels/)
 - [Universal Storage 2](https://spacedock.info/mod/2960/Universal%20Storage%20II%20Finalized)
 - [Dynamic Battery Storage](https://github.com/post-kerbin-mining-corporation/DynamicBatteryStorage) - optional EC planning and high-warp buffer support for capsule systems.
-## Known Bugs
-- Scrubber heat generation is currently much lower than intended due to a calculation bug. This will be fixed in a future update.
 ## Roadmap & Upcoming Features
 - UI for background processing
 - ~~Carbon Dioxide Removal Assembly (CDRA) - Instead of only using a LiOH scrubber, the CDRA will extract CO2 to allow for storage (or dumping overboard).~~ (DONE)

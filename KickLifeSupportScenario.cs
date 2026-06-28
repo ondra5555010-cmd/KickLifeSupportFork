@@ -30,12 +30,17 @@ namespace KickLifeSupport
         public double CO2FatalLevel => co2Fatal;
         public double LithiumHydroxidePerCO2 =>
             scrubberRequestRate > 0 ? lithiumHydroxideRequestRate / scrubberRequestRate : 0;
-        public double OpenLoopExtraOxygenPerCO2 =>
-            scrubberRequestRate > 0
-                ? o2RequestRate * Math.Max(openLoopELSOxygenMultiplier - 1.0, 0) / scrubberRequestRate
+        public double GetOpenLoopExtraOxygenPerCO2(double oxygenMultiplier)
+        {
+            return scrubberRequestRate > 0
+                ? o2RequestRate * Math.Max(oxygenMultiplier - 1.0, 0) /
+                    scrubberRequestRate
                 : 0;
+        }
 
         public Dictionary<Guid, LifeSupportStatus> database = new Dictionary<Guid, LifeSupportStatus>();
+        readonly Dictionary<Guid, CachedVesselContext> vesselContextCache =
+            new Dictionary<Guid, CachedVesselContext>();
 
         class VesselLifeSupportContext
         {
@@ -45,15 +50,25 @@ namespace KickLifeSupport
             public int pressurizedCrew;
             public int ambientDependentCrew;
             public int cabinCapacity;
+            public double cabinAirVolume;
             public float cabinCO2;
             public bool ambientSafe;
             public bool underwater;
             public double occupancyScale;
             public readonly List<KickLifeSupportModule> lifeSupportModules = new List<KickLifeSupportModule>();
-            public readonly List<KickTemperatureControlModule> temperatureModules = new List<KickTemperatureControlModule>();
             public readonly List<ProtoLifeSupportPart> protoLifeSupportParts = new List<ProtoLifeSupportPart>();
-            public readonly List<ProtoTemperaturePart> protoTemperatureParts = new List<ProtoTemperaturePart>();
             public readonly List<ScrubberContribution> scrubberContributions = new List<ScrubberContribution>();
+        }
+
+        class CachedVesselContext
+        {
+            public Vessel vessel;
+            public bool loaded;
+            public int lastRefreshFrame = -1;
+            public double lastRefreshTime = double.NaN;
+            public readonly VesselLifeSupportContext context = new VesselLifeSupportContext();
+            public readonly List<KickLifeSupportModule> discoveredModules = new List<KickLifeSupportModule>();
+            public readonly List<ProtoLifeSupportPart> discoveredProtoParts = new List<ProtoLifeSupportPart>();
         }
 
         class ProtoLifeSupportPart
@@ -65,17 +80,12 @@ namespace KickLifeSupport
             public int atmosphereControlMode;
             public bool atmosphericControlEnabled;
             public double atmosphericControlECRate;
+            public double airVolumePerSeat;
+            public double openLoopOxygenMultiplier;
+            public bool openLoopActive;
             public double pressureExposureTime;
-        }
-
-        class ProtoTemperaturePart
-        {
-            public ProtoPartSnapshot part;
-            public ProtoPartModuleSnapshot module;
-            public int crew;
-            public int capacity;
-            public bool enabled;
-            public double ecRate;
+            public bool thermalControlEnabled;
+            public double thermalControlECRate;
         }
 
         struct ScrubberContribution
@@ -86,20 +96,9 @@ namespace KickLifeSupport
             public int capacity;
             public bool loaded;
             public bool usesOpenLoopOxygenAssist;
+            public double openLoopOxygenMultiplier;
         }
 
-        /// <summary>
-        /// The total amount of air in liters per seat
-        /// </summary>
-        const double airPerSeat = 2000;
-        /// <summary>
-        /// The CO2 concentration (in liters) threshold for warning. This is 3% of airPerKerbal.
-        /// </summary>
-        const double co2Warning = 0.03;
-        /// <summary>
-        /// The CO2 concentration (in liters) threshold for fatality. This is 10% of airPerKerbal.
-        /// </summary>
-        const double co2Fatal = 0.1;
         #region Resource IDs
         int o2Id = -1;
         int co2Id = -1;
@@ -121,13 +120,6 @@ namespace KickLifeSupport
         float wasteRequestRate;
         float wasteWaterRequestRate;
         float lithiumHydroxideRequestRate;
-        float regenerativeScrubberECRequestRate;
-
-        // EC Rates
-        float scrubberECRequestRate;
-        float openLoopELSECRequestRate;
-        float openLoopELSOxygenMultiplier;
-
         // Grace Periods
         float graceO2;
         float graceWater;
@@ -142,8 +134,10 @@ namespace KickLifeSupport
         // Heat Generation
         public float kerbalHeat;
 
-        const double minSafeTemp = 5;   // 5c
-        const double maxSafeTemp = 45;  // 45c
+        float co2Warning;
+        float co2Fatal;
+        float minSafeTemp;
+        float maxSafeTemp;
 
         #endregion
 
@@ -153,6 +147,10 @@ namespace KickLifeSupport
         {
             Instance = this;
             Debug.Log("[KICKLS] Scenario Module Awake");
+
+            GameEvents.onVesselWasModified.Add(InvalidateVesselContext);
+            GameEvents.onVesselGoOnRails.Add(InvalidateVesselContext);
+            GameEvents.onVesselDestroy.Add(RemoveVesselContext);
 
             GetSettings();
             GetResourceIds();
@@ -165,14 +163,34 @@ namespace KickLifeSupport
             if (o2RequestRate <= 0) Debug.LogError("[KICKLS] CRITICAL: Oxygen Rate is 0!");
         }
 
+        public void OnDestroy()
+        {
+            GameEvents.onVesselWasModified.Remove(InvalidateVesselContext);
+            GameEvents.onVesselGoOnRails.Remove(InvalidateVesselContext);
+            GameEvents.onVesselDestroy.Remove(RemoveVesselContext);
+            vesselContextCache.Clear();
+            if (Instance == this) Instance = null;
+        }
+
+        void InvalidateVesselContext(Vessel vessel)
+        {
+            if (vessel != null) vesselContextCache.Remove(vessel.id);
+        }
+
+        void RemoveVesselContext(Vessel vessel)
+        {
+            if (vessel == null) return;
+            vesselContextCache.Remove(vessel.id);
+            database.Remove(vessel.id);
+        }
+
         public void FixedUpdate()
         {
             double currentTime = Planetarium.GetUniversalTime();
 
             foreach (Vessel v in FlightGlobals.Vessels)
             {
-                VesselLifeSupportContext ctx = BuildContext(v);
-                if (ctx == null) continue;
+                if (!IsPotentialLifeSupportVessel(v)) continue;
 
                 LifeSupportStatus data = GetData(v.id);
 
@@ -186,11 +204,14 @@ namespace KickLifeSupport
                 double deltaTime = currentTime - data.lastUpdateTime;
 
                 if (!v.loaded && deltaTime < 1.0) continue;
-                data.lastUpdateTime = currentTime;
 
                 // If time went backwards or there was a big spike, reset.
                 if (deltaTime < 0) return;
 
+                VesselLifeSupportContext ctx = BuildContext(v, currentTime);
+                if (ctx == null) continue;
+
+                data.lastUpdateTime = currentTime;
                 data.cabinCO2 = ctx.cabinCO2;
 
                 /*
@@ -225,171 +246,103 @@ namespace KickLifeSupport
         /// <returns></returns>
         bool IsValidVessel(Vessel vessel)
         {
-            if (vessel == null) return false;
-
-            if ((vessel.vesselType == VesselType.Debris) ||
-                (vessel.vesselType == VesselType.Flag) ||
-                (vessel.vesselType == VesselType.SpaceObject) ||
-                (vessel.vesselType == VesselType.Unknown))
-            {
-                return false;
-            }
-
-            // TODO: EVA life support?
-            if (vessel.vesselType == VesselType.EVA) return false;
-
-            if (vessel.state == Vessel.State.DEAD) return false;
-
-            if (vessel.GetCrewCount() == 0) return false;
+            if (!IsPotentialLifeSupportVessel(vessel)) return false;
 
             if (!VesselHasLifeSupportModules(vessel)) return false;
 
             return true;
         }
 
-        VesselLifeSupportContext BuildContext(Vessel vessel)
+        bool IsPotentialLifeSupportVessel(Vessel vessel)
         {
-            if (vessel == null) return null;
-
-            if ((vessel.vesselType == VesselType.Debris) ||
-                (vessel.vesselType == VesselType.Flag) ||
-                (vessel.vesselType == VesselType.SpaceObject) ||
-                (vessel.vesselType == VesselType.Unknown) ||
+            if (vessel == null) return false;
+            if (vessel.vesselType == VesselType.Debris ||
+                vessel.vesselType == VesselType.Flag ||
+                vessel.vesselType == VesselType.SpaceObject ||
+                vessel.vesselType == VesselType.Unknown ||
                 vessel.vesselType == VesselType.EVA ||
                 vessel.state == Vessel.State.DEAD ||
                 vessel.GetCrewCount() == 0)
             {
-                return null;
+                return false;
             }
 
-            VesselLifeSupportContext ctx = new VesselLifeSupportContext
-            {
-                vessel = vessel,
-                loaded = vessel.loaded,
-                ambientSafe = IsAmbientAtmosphereSafe(vessel),
-                underwater = IsVesselUnderwater(vessel)
-            };
+            return true;
+        }
 
-            if (vessel.loaded)
+        VesselLifeSupportContext BuildContext(Vessel vessel, double refreshTime)
+        {
+            if (!IsPotentialLifeSupportVessel(vessel)) return null;
+
+            CachedVesselContext cached = GetOrCreateCachedContext(vessel);
+            if (cached == null) return null;
+            if (cached.lastRefreshFrame == Time.frameCount &&
+                cached.lastRefreshTime == refreshTime)
             {
-                foreach (Part part in vessel.parts)
+                return cached.context;
+            }
+
+            cached.lastRefreshFrame = Time.frameCount;
+            cached.lastRefreshTime = refreshTime;
+            VesselLifeSupportContext ctx = cached.context;
+            ctx.vessel = vessel;
+            ctx.loaded = vessel.loaded;
+            ctx.liveCrew = 0;
+            ctx.pressurizedCrew = 0;
+            ctx.ambientDependentCrew = 0;
+            ctx.cabinCapacity = 0;
+            ctx.cabinAirVolume = 0;
+            ctx.cabinCO2 = 0;
+            ctx.ambientSafe = IsAmbientAtmosphereSafe(vessel);
+            ctx.underwater = IsVesselUnderwater(vessel);
+            ctx.occupancyScale = 0;
+            ctx.lifeSupportModules.Clear();
+            ctx.protoLifeSupportParts.Clear();
+            ctx.scrubberContributions.Clear();
+
+            if (cached.loaded)
+            {
+                foreach (KickLifeSupportModule lifeSupport in cached.discoveredModules)
                 {
-                    if (part == null) continue;
+                    if (lifeSupport == null || lifeSupport.part == null ||
+                        !lifeSupport.lifeSupportEnabled) continue;
 
-                    KickLifeSupportModule lifeSupport = part.FindModuleImplementing<KickLifeSupportModule>();
-                    if (lifeSupport != null && lifeSupport.lifeSupportEnabled)
-                    {
-                        ctx.lifeSupportModules.Add(lifeSupport);
-                        int crew = part.protoModuleCrew.Count;
-                        ctx.liveCrew += crew;
-
-                        if (lifeSupport.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
-                        {
-                            if (!ctx.ambientSafe) ctx.ambientDependentCrew += crew;
-                        }
-                        else if (KickLifeSupportModule.UsesPartialPressurization(lifeSupport.atmosphereControlMode) &&
-                                 !IsPartialPressureUsable(ctx))
-                        {
-                            ctx.ambientDependentCrew += crew;
-                        }
-                        else
-                        {
-                            ctx.cabinCapacity += part.CrewCapacity;
-                            ctx.cabinCO2 += lifeSupport.cabinCO2;
-                            if (!KickLifeSupportModule.UsesPartialPressurization(lifeSupport.atmosphereControlMode) ||
-                                !ctx.ambientSafe)
-                            {
-                                ctx.pressurizedCrew += crew;
-                            }
-                        }
-                    }
-
-                    if (gameSettings != null && gameSettings.useCabinTempSystem)
-                    {
-                        KickTemperatureControlModule temperature = part.FindModuleImplementing<KickTemperatureControlModule>();
-                        if (temperature != null)
-                        {
-                            ctx.temperatureModules.Add(temperature);
-                        }
-                    }
+                    ctx.lifeSupportModules.Add(lifeSupport);
+                    int crew = lifeSupport.part.protoModuleCrew.Count;
+                    ctx.liveCrew += crew;
+                    AccumulateCabinContext(
+                        ctx,
+                        lifeSupport.atmosphereControlMode,
+                        crew,
+                        lifeSupport.part.CrewCapacity,
+                        lifeSupport.airVolumePerSeat,
+                        lifeSupport.cabinCO2);
                 }
             }
             else
             {
-                foreach (ProtoPartSnapshot part in vessel.protoVessel.protoPartSnapshots)
+                foreach (ProtoLifeSupportPart record in cached.discoveredProtoParts)
                 {
-                    if (part == null) continue;
-                    int capacity = 0;
-                    if (part.partInfo != null && part.partInfo.partPrefab != null)
-                    {
-                        capacity = part.partInfo.partPrefab.CrewCapacity;
-                    }
+                    if (record.part == null || record.module == null ||
+                        !IsLifeSupportModuleEnabled(record.module)) continue;
 
-                    int crew = part.protoModuleCrew.Count;
+                    RefreshProtoLifeSupportPart(record);
+                    ctx.protoLifeSupportParts.Add(record);
+                    ctx.liveCrew += record.crew;
 
-                    foreach (ProtoPartModuleSnapshot module in part.modules)
-                    {
-                        if (module.moduleName == "KickLifeSupportModule" && IsLifeSupportModuleEnabled(module))
-                        {
-                            int atmosphereControlMode = GetAtmosphereControlMode(module);
-                            ProtoLifeSupportPart record = new ProtoLifeSupportPart
-                            {
-                                part = part,
-                                module = module,
-                                crew = crew,
-                                capacity = capacity,
-                                atmosphereControlMode = atmosphereControlMode,
-                                atmosphericControlEnabled = IsAtmosphericControlEnabled(module),
-                                atmosphericControlECRate = GetAtmosphericControlECRate(module, atmosphereControlMode),
-                                pressureExposureTime = GetModuleDouble(module, "pressureExposureTime")
-                            };
-
-                            ctx.protoLifeSupportParts.Add(record);
-                            ctx.liveCrew += crew;
-
-                            if (record.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
-                            {
-                                if (!ctx.ambientSafe) ctx.ambientDependentCrew += crew;
-                            }
-                            else if (KickLifeSupportModule.UsesPartialPressurization(record.atmosphereControlMode) &&
-                                     !IsPartialPressureUsable(ctx))
-                            {
-                                ctx.ambientDependentCrew += crew;
-                            }
-                            else
-                            {
-                                ctx.cabinCapacity += capacity;
-                                if (float.TryParse(module.moduleValues.GetValue("cabinCO2"), out float co2))
-                                {
-                                    ctx.cabinCO2 += co2;
-                                }
-                                if (!KickLifeSupportModule.UsesPartialPressurization(record.atmosphereControlMode) ||
-                                    !ctx.ambientSafe)
-                                {
-                                    ctx.pressurizedCrew += crew;
-                                }
-                            }
-                        }
-                        else if (module.moduleName == "KickTemperatureControlModule")
-                        {
-                            double ecRate = 0.03;
-                            string val = module.moduleValues.GetValue("systemECRate");
-                            if (val != null) double.TryParse(val, out ecRate);
-
-                            val = module.moduleValues.GetValue("climateControlEnabled");
-                            bool enabled = val == null || (bool.TryParse(val, out bool bVal) && bVal);
-
-                            ctx.protoTemperatureParts.Add(new ProtoTemperaturePart
-                            {
-                                part = part,
-                                module = module,
-                                crew = crew,
-                                capacity = capacity,
-                                enabled = enabled,
-                                ecRate = ecRate
-                            });
-                        }
-                    }
+                    float cabinCO2 = 0;
+                    float.TryParse(
+                        record.module.moduleValues.GetValue("cabinCO2"),
+                        NumberStyles.Float,
+                        CultureInfo.InvariantCulture,
+                        out cabinCO2);
+                    AccumulateCabinContext(
+                        ctx,
+                        record.atmosphereControlMode,
+                        record.crew,
+                        record.capacity,
+                        record.airVolumePerSeat,
+                        cabinCO2);
                 }
             }
 
@@ -402,6 +355,139 @@ namespace KickLifeSupport
                 ? Math.Min(ctx.pressurizedCrew / usableScrubberCapacity, 1.0)
                 : 0.0;
             return ctx;
+        }
+
+        internal bool TryGetVesselCabinMetrics(
+            Vessel vessel,
+            out double cabinAirVolume,
+            out float occupancyScale)
+        {
+            cabinAirVolume = 0;
+            occupancyScale = 0;
+            if (!HighLogic.LoadedSceneIsFlight || vessel == null) return false;
+
+            VesselLifeSupportContext ctx =
+                BuildContext(vessel, Planetarium.GetUniversalTime());
+            if (ctx == null) return false;
+
+            cabinAirVolume = ctx.cabinAirVolume;
+            occupancyScale = (float)ctx.occupancyScale;
+            return true;
+        }
+
+        CachedVesselContext GetOrCreateCachedContext(Vessel vessel)
+        {
+            if (vesselContextCache.TryGetValue(vessel.id, out CachedVesselContext cached) &&
+                cached.vessel == vessel &&
+                cached.loaded == vessel.loaded)
+            {
+                return cached;
+            }
+
+            cached = new CachedVesselContext
+            {
+                vessel = vessel,
+                loaded = vessel.loaded
+            };
+            cached.context.vessel = vessel;
+            cached.context.loaded = vessel.loaded;
+
+            if (vessel.loaded)
+            {
+                foreach (Part part in vessel.parts)
+                {
+                    if (part == null) continue;
+                    KickLifeSupportModule module =
+                        part.FindModuleImplementing<KickLifeSupportModule>();
+                    if (module != null) cached.discoveredModules.Add(module);
+                }
+            }
+            else if (vessel.protoVessel != null)
+            {
+                foreach (ProtoPartSnapshot part in vessel.protoVessel.protoPartSnapshots)
+                {
+                    if (part == null) continue;
+                    int capacity =
+                        part.partInfo != null && part.partInfo.partPrefab != null
+                            ? part.partInfo.partPrefab.CrewCapacity
+                            : 0;
+
+                    foreach (ProtoPartModuleSnapshot module in part.modules)
+                    {
+                        if (module.moduleName != "KickLifeSupportModule") continue;
+                        cached.discoveredProtoParts.Add(new ProtoLifeSupportPart
+                        {
+                            part = part,
+                            module = module,
+                            capacity = capacity
+                        });
+                    }
+                }
+            }
+
+            vesselContextCache[vessel.id] = cached;
+            return cached;
+        }
+
+        void RefreshProtoLifeSupportPart(ProtoLifeSupportPart record)
+        {
+            record.crew = record.part.protoModuleCrew.Count;
+            record.atmosphereControlMode = GetAtmosphereControlMode(record.module);
+            record.atmosphericControlEnabled = IsAtmosphericControlEnabled(record.module);
+            KickLifeSupportModule prefabModule = GetPrefabLifeSupportModule(record.part);
+            record.atmosphericControlECRate =
+                GetAtmosphericControlECRate(
+                    record.module,
+                    record.atmosphereControlMode,
+                    prefabModule);
+            record.airVolumePerSeat =
+                GetModuleDouble(
+                    record.module,
+                    "airVolumePerSeat",
+                    prefabModule != null ? prefabModule.airVolumePerSeat : 2000);
+            record.openLoopOxygenMultiplier =
+                GetModuleDouble(
+                    record.module,
+                    "openLoopOxygenMultiplier",
+                    prefabModule != null ? prefabModule.openLoopOxygenMultiplier : 10);
+            record.openLoopActive = false;
+            record.pressureExposureTime =
+                GetModuleDouble(record.module, "pressureExposureTime");
+            record.thermalControlEnabled =
+                GetModuleBool(record.module, "climateControlEnabled", true);
+            record.thermalControlECRate =
+                GetModuleDouble(record.module, "systemECRate", 0.003);
+        }
+
+        void AccumulateCabinContext(
+            VesselLifeSupportContext ctx,
+            int atmosphereControlMode,
+            int crew,
+            int capacity,
+            double airVolumePerSeat,
+            float cabinCO2)
+        {
+            if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
+            {
+                if (!ctx.ambientSafe) ctx.ambientDependentCrew += crew;
+                return;
+            }
+
+            if (KickLifeSupportModule.UsesPartialPressurization(atmosphereControlMode) &&
+                !IsPartialPressureUsable(ctx))
+            {
+                ctx.ambientDependentCrew += crew;
+                return;
+            }
+
+            ctx.cabinCapacity += capacity;
+            ctx.cabinAirVolume += capacity * Math.Max(airVolumePerSeat, 0);
+            ctx.cabinCO2 += cabinCO2;
+            if (!KickLifeSupportModule.UsesPartialPressurization(atmosphereControlMode) ||
+                !ctx.ambientSafe)
+            {
+                ctx.pressurizedCrew += crew;
+            }
         }
 
         double GetUsableScrubberCapacity(VesselLifeSupportContext ctx)
@@ -585,12 +671,6 @@ namespace KickLifeSupport
             wasteRequestRate = GetValue(settings, "WASTE_RATE");
             wasteWaterRequestRate = GetValue(settings, "WASTEWATER_RATE");
             lithiumHydroxideRequestRate = GetValue(settings, "LITHIUMHYDROXIDE_RATE");
-            scrubberECRequestRate = GetValue(settings, "SCRUBBER_EC_RATE");
-            regenerativeScrubberECRequestRate = GetValue(settings, "REGENERATIVE_SCRUBBER_EC_RATE");
-            openLoopELSECRequestRate = GetValue(settings, "OPEN_LOOP_ELS_EC_RATE");
-            openLoopELSOxygenMultiplier = GetValue(settings, "OPEN_LOOP_ELS_OXYGEN_MULTIPLIER");
-            if (openLoopELSOxygenMultiplier <= 0) openLoopELSOxygenMultiplier = 5f;
-
             graceO2 = GetValue(settings, "GRACE_OXYGEN");
             graceFood = GetValue(settings, "GRACE_FOOD");
             graceWater = GetValue(settings, "GRACE_WATER");
@@ -609,6 +689,10 @@ namespace KickLifeSupport
             UnpressurizedPressureFailureKPa = unpressurizedPressureFailure;
 
             kerbalHeat = GetValue(settings, "KERBAL_HEAT");
+            co2Warning = KickLifeSupportConfig.GetFloat("CO2_WARNING_LEVEL", 0.03f);
+            co2Fatal = KickLifeSupportConfig.GetFloat("CO2_FATAL_LEVEL", 0.10f);
+            minSafeTemp = KickLifeSupportConfig.GetFloat("MIN_SAFE_CABIN_TEMP", 5f);
+            maxSafeTemp = KickLifeSupportConfig.GetFloat("MAX_SAFE_CABIN_TEMP", 45f);
         }
 
         float GetValue(ConfigNode node, string key)
@@ -676,7 +760,11 @@ namespace KickLifeSupport
                         continue;
                     }
 
-                    float share = (float)m.part.CrewCapacity / ctx.cabinCapacity;
+                    double moduleAirVolume =
+                        m.part.CrewCapacity * Math.Max(m.airVolumePerSeat, 0);
+                    float share = ctx.cabinAirVolume > 0
+                        ? (float)(moduleAirVolume / ctx.cabinAirVolume)
+                        : 0;
                     m.cabinCO2 = totalCO2 * share;
                 }
             }
@@ -695,8 +783,12 @@ namespace KickLifeSupport
                         continue;
                     }
 
-                    if (p.capacity == 0) continue;
-                    float share = (float)p.capacity / ctx.cabinCapacity;
+                    double moduleAirVolume =
+                        p.capacity * Math.Max(p.airVolumePerSeat, 0);
+                    if (moduleAirVolume <= 0) continue;
+                    float share = ctx.cabinAirVolume > 0
+                        ? (float)(moduleAirVolume / ctx.cabinAirVolume)
+                        : 0;
                     p.module.moduleValues.SetValue("cabinCO2", totalCO2 * share);
                 }
             }
@@ -796,7 +888,7 @@ namespace KickLifeSupport
             status.ambientDependentCrew = ctx.ambientDependentCrew;
             status.ambientAtmosphereUnsafe = unsafeAmbientCrew > 0;
             status.ambientAtmosphereUnderwater = ctx.underwater;
-            double co2Level = CalculateCabinCO2(status, ctx.cabinCapacity);
+            double co2Level = CalculateCabinCO2(status, ctx.cabinAirVolume);
 
             if (resparation.o2Ratio < 0.99 || co2Level >= co2Fatal)
                 status.lowO2Time += deltaTime;
@@ -854,6 +946,7 @@ namespace KickLifeSupport
             {
                 foreach (ProtoLifeSupportPart p in ctx.protoLifeSupportParts)
                 {
+                    p.openLoopActive = false;
                     if (p.atmosphereControlMode != KickLifeSupportModule.AtmosphereControlOpenLoopELS) continue;
 
                     if (!p.atmosphericControlEnabled)
@@ -879,6 +972,7 @@ namespace KickLifeSupport
                     }
 
                     status.activeOpenLoopELSVentCapacity += partCapacity;
+                    p.openLoopActive = true;
                 }
             }
 
@@ -909,8 +1003,6 @@ namespace KickLifeSupport
             double baseScrubRate = scrubberRequestRate * deltaTime;
             double availableCO2 = Math.Max(status.cabinCO2, 0);
             double lithiumHydroxidePerCO2 = scrubberRequestRate > epsilon ? lithiumHydroxideRequestRate / scrubberRequestRate : 0;
-            double openLoopExtraOxygenPerCO2 = scrubberRequestRate > epsilon ? o2RequestRate * Math.Max(openLoopELSOxygenMultiplier - 1.0, 0) / scrubberRequestRate : 0;
-
             if (ctx.loaded)
             {
                 foreach (KickLifeSupportModule m in ctx.lifeSupportModules)
@@ -947,7 +1039,8 @@ namespace KickLifeSupport
                                 mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
                                 capacity = elsCapacity,
                                 loaded = true,
-                                usesOpenLoopOxygenAssist = false
+                                usesOpenLoopOxygenAssist = false,
+                                openLoopOxygenMultiplier = m.openLoopOxygenMultiplier
                             });
                         }
                         else if (!m.scrubberEnabled)
@@ -962,7 +1055,8 @@ namespace KickLifeSupport
                                 mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
                                 capacity = elsCapacity,
                                 loaded = true,
-                                usesOpenLoopOxygenAssist = true
+                                usesOpenLoopOxygenAssist = true,
+                                openLoopOxygenMultiplier = m.openLoopOxygenMultiplier
                             });
                         }
                         continue;
@@ -1002,17 +1096,6 @@ namespace KickLifeSupport
             }
             else
             {
-                if (status.activeOpenLoopELSVentCapacity > 0)
-                {
-                    contributions.Add(new ScrubberContribution
-                    {
-                        mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
-                        capacity = (int)Math.Max(status.activeOpenLoopELSVentCapacity, 1),
-                        loaded = false,
-                        usesOpenLoopOxygenAssist = true
-                    });
-                }
-
                 foreach (ProtoLifeSupportPart p in ctx.protoLifeSupportParts)
                 {
                     bool isScrubberOn = p.atmosphericControlEnabled;
@@ -1044,7 +1127,20 @@ namespace KickLifeSupport
                                 mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
                                 capacity = partCapacity,
                                 loaded = false,
-                                usesOpenLoopOxygenAssist = false
+                                usesOpenLoopOxygenAssist = false,
+                                openLoopOxygenMultiplier = p.openLoopOxygenMultiplier
+                            });
+                        }
+                        else if (p.openLoopActive)
+                        {
+                            contributions.Add(new ScrubberContribution
+                            {
+                                protoPart = p,
+                                mode = KickLifeSupportModule.AtmosphereControlOpenLoopELS,
+                                capacity = partCapacity,
+                                loaded = false,
+                                usesOpenLoopOxygenAssist = true,
+                                openLoopOxygenMultiplier = p.openLoopOxygenMultiplier
                             });
                         }
                         continue;
@@ -1116,7 +1212,10 @@ namespace KickLifeSupport
                     {
                         if (contribution.usesOpenLoopOxygenAssist)
                         {
-                            double o2Req = requestedScrubAmount * openLoopExtraOxygenPerCO2;
+                            double o2Req =
+                                requestedScrubAmount *
+                                GetOpenLoopExtraOxygenPerCO2(
+                                    contribution.openLoopOxygenMultiplier);
                             (double o2Consumed, double o2Ratio) o2Result = ConsumeResource(ctx.vessel, o2Id, o2Req);
 
                             if (o2Result.o2Ratio < 0.99)
@@ -1255,7 +1354,7 @@ namespace KickLifeSupport
         /// Calcualtes the cabin CO2 concentration as a percentage
         /// </summary>
         /// <param name="crewCount"></param>
-        double CalculateCabinCO2(LifeSupportStatus status, int crewCount)
+        double CalculateCabinCO2(LifeSupportStatus status, double cabinAirVolume)
         {
             if (double.IsNaN(status.cabinCO2) || double.IsInfinity(status.cabinCO2))
             {
@@ -1263,8 +1362,8 @@ namespace KickLifeSupport
             }
 
             if (status.cabinCO2 < 0) status.cabinCO2 = 0;
-            if (crewCount > 0 && airPerSeat > 0)
-                return status.cabinCO2 / (float)(crewCount * airPerSeat);
+            if (cabinAirVolume > 0)
+                return status.cabinCO2 / cabinAirVolume;
             else
                 return 0;
         }
@@ -1286,18 +1385,18 @@ namespace KickLifeSupport
 
             if (!ctx.loaded)
             {
-                foreach (ProtoTemperaturePart p in ctx.protoTemperatureParts)
+                foreach (ProtoLifeSupportPart p in ctx.protoLifeSupportParts)
                 {
                     if (p.capacity == 0) continue;
 
-                    if (!p.enabled)
+                    if (!p.thermalControlEnabled)
                     {
                         if (p.crew > 0)
                             climateFailureDetected = true;
                         continue;
                     }
 
-                    double ecReq = p.ecRate * p.capacity;
+                    double ecReq = p.thermalControlECRate * p.capacity;
                     (double amountConsumed, double ratio) ecRes = ConsumeResource(ctx.vessel, electricChargeId, ecReq);
                     if (ecRes.ratio < 0.99)
                     {
@@ -1331,7 +1430,7 @@ namespace KickLifeSupport
 
             bool tempIssueDetected = false;
 
-            foreach (KickTemperatureControlModule module in ctx.temperatureModules)
+            foreach (KickLifeSupportModule module in ctx.lifeSupportModules)
             {
                 if (module.part.protoModuleCrew.Count == 0) continue;
 
@@ -1358,7 +1457,7 @@ namespace KickLifeSupport
         /// </summary>
         void CheckConditions(VesselLifeSupportContext ctx, LifeSupportStatus status, double deltaTime)
         {
-            double co2Level = CalculateCabinCO2(status, ctx.cabinCapacity);
+            double co2Level = CalculateCabinCO2(status, ctx.cabinAirVolume);
 
             // PRIORITY 0: Nominal
             status.lsStatus = "Nominal";
@@ -1792,7 +1891,10 @@ namespace KickLifeSupport
             return KickLifeSupportModule.AtmosphereControlLiOH;
         }
 
-        double GetAtmosphericControlECRate(ProtoPartModuleSnapshot module, int atmosphereControlMode)
+        double GetAtmosphericControlECRate(
+            ProtoPartModuleSnapshot module,
+            int atmosphereControlMode,
+            KickLifeSupportModule prefabModule)
         {
             string value = module.moduleValues.GetValue("atmosphericControlECRate");
             if (value != null &&
@@ -1802,21 +1904,48 @@ namespace KickLifeSupport
             }
 
             if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlOpenLoopELS)
-                return openLoopELSECRequestRate;
-            if (IsRegenerativeScrubber(atmosphereControlMode))
-                return regenerativeScrubberECRequestRate;
+                return prefabModule != null
+                    ? prefabModule.openLoopAtmosphericControlECRate
+                    : 0.005;
+            if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlRegenerativeScrubber)
+                return prefabModule != null
+                    ? prefabModule.zeoliteAtmosphericControlECRate
+                    : 0.2;
+            if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlSolidAmine)
+                return prefabModule != null
+                    ? prefabModule.solidAmineAtmosphericControlECRate
+                    : 0.1;
             if (atmosphereControlMode == KickLifeSupportModule.AtmosphereControlLiOH)
-                return scrubberECRequestRate;
+                return prefabModule != null
+                    ? prefabModule.liohAtmosphericControlECRate
+                    : 0.05;
             return 0;
         }
 
-        double GetModuleDouble(ProtoPartModuleSnapshot module, string fieldName)
+        KickLifeSupportModule GetPrefabLifeSupportModule(ProtoPartSnapshot part)
+        {
+            return part != null &&
+                   part.partInfo != null &&
+                   part.partInfo.partPrefab != null
+                ? part.partInfo.partPrefab.FindModuleImplementing<KickLifeSupportModule>()
+                : null;
+        }
+
+        double GetModuleDouble(ProtoPartModuleSnapshot module, string fieldName, double defaultValue = 0)
         {
             string value = module.moduleValues.GetValue(fieldName);
             return value != null &&
                    double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
                 ? parsed
-                : 0;
+                : defaultValue;
+        }
+
+        bool GetModuleBool(ProtoPartModuleSnapshot module, string fieldName, bool defaultValue)
+        {
+            string value = module.moduleValues.GetValue(fieldName);
+            return value != null && bool.TryParse(value, out bool parsed)
+                ? parsed
+                : defaultValue;
         }
 
         bool IsRegenerativeScrubber(int atmosphereControlMode)
