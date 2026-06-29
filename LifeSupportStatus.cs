@@ -1,20 +1,10 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace KickLifeSupport
 {
     public class LifeSupportStatus
     {
         public string lsStatus = "Nominal";
         public float cabinCO2 = 0;
-        public bool scrubberEnabled = true;
-        public bool climateControlEnabled = true;
-        public bool avionicsEnabled = true;
-        public bool ambientAtmosphereUnderwater = false;
-
         public double lowO2Time = 0f;
         public double ambientExposureTime = 0f;
         public double ambientExposureRemaining = -1f;
@@ -41,23 +31,14 @@ namespace KickLifeSupport
 
         public double lastUpdateTime = 0;
 
-        public double lastRegenerativeScrubAmount = 0f;
         public double lastLiOHScrubAmount = 0f;
         public double lastOpenLoopVentedAmount = 0f;
-        public double activeOpenLoopELSVentCapacity = 0f;
-        public double activeRegenerativeScrubberSystemCapacity = 0f;
-        public double activeLiOHSystemCapacity = 0f;
-        public int activeRegenerativeScrubberCount = 0;
+        public double activeOpenLoopVentCapacity = 0f;
         public int activeLiOHScrubberCount = 0;
-        public bool ambientAtmosphereUnsafe = false;
-        public int ambientDependentCrew = 0;
 
         public void Save(ConfigNode node)
         {
             node.AddValue("CabinCO2", cabinCO2);
-            node.AddValue("ScrubberEnabled", scrubberEnabled);
-            node.AddValue("ClimateControlEnabled", climateControlEnabled);
-            node.AddValue("AvionicsEnabled", avionicsEnabled);
             node.AddValue("LowO2Time", lowO2Time);
             node.AddValue("AmbientExposureTime", ambientExposureTime);
             node.AddValue("LowWaterTime", lowWaterTime);
@@ -75,9 +56,6 @@ namespace KickLifeSupport
         public void Load(ConfigNode node)
         {
             float.TryParse(node.GetValue("CabinCO2"), out cabinCO2);
-            bool.TryParse(node.GetValue("ScrubberEnabled"), out scrubberEnabled);
-            bool.TryParse(node.GetValue("ClimateControlEnabled"), out climateControlEnabled);
-            bool.TryParse(node.GetValue("AvionicsEnabled"), out avionicsEnabled);
             double.TryParse(node.GetValue("LowO2Time"), out lowO2Time);
             double.TryParse(node.GetValue("AmbientExposureTime"), out ambientExposureTime);
             double.TryParse(node.GetValue("LowWaterTime"), out lowWaterTime);

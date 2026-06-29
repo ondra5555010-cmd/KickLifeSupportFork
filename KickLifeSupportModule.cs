@@ -20,7 +20,7 @@ namespace KickLifeSupport
 
         public const int AtmosphereControlNone = 0;
         public const int AtmosphereControlPressurizedCabin = 1;
-        public const int AtmosphereControlPartiallyPressurizedCabin = 2;
+        public const int AtmosphereControlOpenLoopVentilation = 2;
         public const int AtmosphereControlLiOH = 3;
         public const int AtmosphereControlRegenerativeScrubber = 4;
         public const int AtmosphereControlSolidAmine = 5;
@@ -63,7 +63,7 @@ namespace KickLifeSupport
         public float pressurizedCabinPartConductance = 0.001f;
 
         [KSPField]
-        public float partiallyPressurizedCabinPartConductance = 0.01f;
+        public float openLoopCabinPartConductance = 0.01f;
 
         [KSPField]
         public float unpressurizedCabinPartConductance = 0.1f;
@@ -115,6 +115,7 @@ namespace KickLifeSupport
         public double currentOpenLoopOxygenWasteRate = 0;
         public double currentAtmosphericControlECRate = 0;
         public string rawScrubberStatus = "On";
+        internal bool openLoopVentingActive = false;
 
         bool partActionWindowInitialized = false;
         int lastAtmosphereControlMode = -1;
@@ -214,18 +215,18 @@ namespace KickLifeSupport
                             KickLifeSupportScenario.Instance.LithiumHydroxidePerCO2;
                     }
                 }
-                else if (atmosphereControlMode == AtmosphereControlPartiallyPressurizedCabin)
+                else if (atmosphereControlMode == AtmosphereControlOpenLoopVentilation)
                 {
                     currentSystemHeatFlux += GetAtmosphericControlElectricalHeat();
-                    if (rawScrubberStatus == "ELS Active" &&
+                    if (rawScrubberStatus == "Active Venting" &&
                         data.lastOpenLoopVentedAmount > 0 &&
-                        data.activeOpenLoopELSVentCapacity > 0 &&
+                        data.activeOpenLoopVentCapacity > 0 &&
                         dt > 0)
                     {
                         currentOpenLoopOxygenWasteRate =
                             (data.lastOpenLoopVentedAmount *
                                 GetDBSCapacityEstimate() /
-                                data.activeOpenLoopELSVentCapacity /
+                                data.activeOpenLoopVentCapacity /
                                 dt) *
                             KickLifeSupportScenario.Instance.GetOpenLoopExtraOxygenPerCO2(
                                 openLoopOxygenMultiplier);
@@ -242,11 +243,11 @@ namespace KickLifeSupport
 
             if (lifeSupportEnabled && data != null)
             {
-                bool isolatedPartialCabin =
-                    UsesPartialPressurization(atmosphereControlMode) &&
-                    !IsPartialPressureUsable();
-                double displayedCO2 = isolatedPartialCabin ? cabinCO2 : data.cabinCO2;
-                double cabinAirVolume = isolatedPartialCabin
+                bool isolatedOpenLoopCabin =
+                    UsesOpenLoopVentilation(atmosphereControlMode) &&
+                    !IsOpenLoopPressureUsable();
+                double displayedCO2 = isolatedOpenLoopCabin ? cabinCO2 : data.cabinCO2;
+                double cabinAirVolume = isolatedOpenLoopCabin
                     ? Mathf.Max(part.CrewCapacity, 1) * Mathf.Max(airVolumePerSeat, 0f)
                     : GetVesselCabinAirVolume(vessel);
                 co2Level = cabinAirVolume > 0
@@ -332,9 +333,9 @@ namespace KickLifeSupport
                 case "UnpressurizedCabin":
                     SetAtmosphericControlConfiguration(AtmosphereControlNone, 0, 0);
                     break;
-                case "PartiallyPressurizedCabin":
+                case "OpenLoopVenting":
                     SetAtmosphericControlConfiguration(
-                        AtmosphereControlPartiallyPressurizedCabin,
+                        AtmosphereControlOpenLoopVentilation,
                         openLoopAtmosphericControlECRate,
                         poweredAtmosphericControlHeatPerEC);
                     break;
@@ -396,7 +397,7 @@ namespace KickLifeSupport
                 Fields["liohUseDisplay"].guiActive = usesLiOH;
                 Fields["liohHeatDisplay"].guiActive = usesLiOH;
                 Fields["oxygenWasteDisplay"].guiActive =
-                    atmosphereControlMode == AtmosphereControlPartiallyPressurizedCabin;
+                    atmosphereControlMode == AtmosphereControlOpenLoopVentilation;
                 Fields["atmosphericControlECDisplay"].guiActive = hasScrubber;
                 Fields["scrubberEnabled"].guiActive = hasScrubber;
                 Events["ReloadScrubber"].active = lifeSupportEnabled && usesLiOH;
@@ -450,8 +451,8 @@ namespace KickLifeSupport
         {
             switch (atmosphereControlMode)
             {
-                case AtmosphereControlPartiallyPressurizedCabin:
-                    return "Partially Pressurized Cabin";
+                case AtmosphereControlOpenLoopVentilation:
+                    return "Open-Loop Ventilation";
                 case AtmosphereControlLiOH:
                     return "LiOH Scrubber";
                 case AtmosphereControlRegenerativeScrubber:
@@ -467,7 +468,7 @@ namespace KickLifeSupport
 
         bool HasActiveAtmosphericControlSystem()
         {
-            return atmosphereControlMode == AtmosphereControlPartiallyPressurizedCabin ||
+            return atmosphereControlMode == AtmosphereControlOpenLoopVentilation ||
                    atmosphereControlMode == AtmosphereControlLiOH ||
                    IsRegenerativeScrubber();
         }
@@ -478,9 +479,9 @@ namespace KickLifeSupport
                    atmosphereControlMode == AtmosphereControlSolidAmine;
         }
 
-        public static bool UsesPartialPressurization(int mode)
+        public static bool UsesOpenLoopVentilation(int mode)
         {
-            return mode == AtmosphereControlPartiallyPressurizedCabin;
+            return mode == AtmosphereControlOpenLoopVentilation;
         }
 
         void RefreshStatusReports(LifeSupportStatus data, double currentCO2Level, int crewCount)
@@ -495,7 +496,7 @@ namespace KickLifeSupport
             double breathingRemaining = -1;
             bool ambientOnly = atmosphereControlMode == AtmosphereControlNone;
             bool pressureExposed =
-                (ambientOnly || UsesPartialPressurization(atmosphereControlMode)) &&
+                (ambientOnly || UsesOpenLoopVentilation(atmosphereControlMode)) &&
                 pressureExposureTime > 0;
 
             if (scenario != null)
@@ -529,10 +530,10 @@ namespace KickLifeSupport
             {
                 string atmosphereLabel = ambientOnly
                     ? "Ambient Air Safe"
-                    : UsesPartialPressurization(atmosphereControlMode)
+                    : UsesOpenLoopVentilation(atmosphereControlMode)
                         ? IsAmbientAtmosphereSafe(vessel)
                             ? "Ambient Atmosphere"
-                            : "Partial Pressure Stable"
+                            : "Open-Loop Pressure Stable"
                         : "Breathable Atmosphere";
                 lsStatus = KickUIFormat.ReportLine(KickUIFormat.Good(atmosphereLabel));
             }
@@ -718,8 +719,8 @@ namespace KickLifeSupport
             {
                 if (!module.lifeSupportEnabled) continue;
                 if (module.atmosphereControlMode == AtmosphereControlNone) continue;
-                if (UsesPartialPressurization(module.atmosphereControlMode) &&
-                    !module.IsPartialPressureUsable()) continue;
+                if (UsesOpenLoopVentilation(module.atmosphereControlMode) &&
+                    !module.IsOpenLoopPressureUsable()) continue;
 
                 volume += module.part.CrewCapacity * Mathf.Max(module.airVolumePerSeat, 0f);
             }
@@ -782,21 +783,18 @@ namespace KickLifeSupport
                 if (!module.lifeSupportEnabled) continue;
                 if (module.atmosphereControlMode != AtmosphereControlNone)
                 {
-                    bool partialCabinUsingAmbient =
-                        UsesPartialPressurization(module.atmosphereControlMode) &&
-                        module.IsAmbientAtmosphereSafe(vessel);
-                    bool partialCabinExposed =
-                        UsesPartialPressurization(module.atmosphereControlMode) &&
-                        !module.IsPartialPressureUsable();
-                    if (!partialCabinUsingAmbient && !partialCabinExposed)
+                    bool openLoopCabinExposed =
+                        UsesOpenLoopVentilation(module.atmosphereControlMode) &&
+                        !module.IsOpenLoopPressureUsable();
+                    if (!openLoopCabinExposed)
                     {
                         totalCrew += module.part.protoModuleCrew.Count;
                     }
                 }
 
                 if (!module.scrubberEnabled || !module.HasActiveAtmosphericControlSystem()) continue;
-                if (module.atmosphereControlMode == AtmosphereControlPartiallyPressurizedCabin &&
-                    !module.IsPartialPressureUsable()) continue;
+                if (module.atmosphereControlMode == AtmosphereControlOpenLoopVentilation &&
+                    !module.IsOpenLoopPressureUsable()) continue;
 
                 totalScrubberCapacity += module.part.CrewCapacity > 0
                     ? module.part.CrewCapacity
@@ -807,11 +805,11 @@ namespace KickLifeSupport
             return Mathf.Min((float)totalCrew / totalScrubberCapacity, 1f);
         }
 
-        bool IsPartialPressureUsable()
+        bool IsOpenLoopPressureUsable()
         {
             if (vessel == null || vessel.mainBody == null) return false;
             if (IsVesselUnderwater(vessel)) return false;
-            return vessel.staticPressurekPa >= KickLifeSupportScenario.PartialPressureMinimumKPa;
+            return vessel.staticPressurekPa >= KickLifeSupportScenario.OpenLoopPressureMinimumKPa;
         }
         #endregion
 

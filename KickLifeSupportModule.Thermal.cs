@@ -967,10 +967,10 @@ namespace KickLifeSupport
                     Math.Max(unpressurizedCabinPartConductance, 0);
             }
             else if (lifeSupport != null &&
-                     KickLifeSupportModule.UsesPartialPressurization(lifeSupport.atmosphereControlMode))
+                     KickLifeSupportModule.UsesOpenLoopVentilation(lifeSupport.atmosphereControlMode))
             {
                 debugCabinPartConductance =
-                    Math.Max(partiallyPressurizedCabinPartConductance, 0);
+                    Math.Max(openLoopCabinPartConductance, 0);
             }
             else
             {
