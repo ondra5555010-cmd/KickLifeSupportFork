@@ -6,87 +6,109 @@ namespace KickLifeSupport
 {
     public partial class KickLifeSupportModule : IAnalyticTemperatureModifier
     {
+        public const int CoolingSystemNone = 0;
+        public const int CoolingSystemIntegrated = 1;
+        public const int CoolingSystemCoolantLoop = 2;
+
         KickLifeSupportSettings gameSettings;
 
         #region Thermal GUI Fields
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Situation Report", groupName = "KICKTEMP", groupDisplayName = "EnCon - General")]
-        public string climateControlStatus = "On";
-
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Master Switch", groupName = "KICKTEMP", groupDisplayName = "EnCon - General"), UI_Toggle(disabledText = "Off", enabledText = "On")]
-        public bool climateControlEnabled = true;
-
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "EC Limit", groupName = "KICKTEMP", groupDisplayName = "EnCon - General", guiFormat = "F3", guiUnits = " EC/s")]
-        [UI_FloatRange(minValue = 0f, maxValue = 1f, stepIncrement = 0.01f, scene = UI_Scene.All)]
-        public float enconECLimit = 1f;
-
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Base EC Cost", groupName = "KICKTEMP", groupDisplayName = "EnCon - General", guiFormat = "F3", guiUnits = " EC/s")]
-        public float enconBaseECDisplay = 0f;
-
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Equipment EC", groupName = "KICKTEMP", groupDisplayName = "EnCon - General", guiFormat = "F3", guiUnits = " EC/s")]
-        public float enconEquipmentECDisplay = 0f;
-
-        [KSPField(guiActive = true, guiActiveEditor = true, guiName = "Thermostat", groupName = "KICKTEMP", groupDisplayName = "EnCon - General")]
+        [KSPField(guiActive = true, guiActiveEditor = true, guiName = "Thermostat", groupName = "KICKTEMP", groupDisplayName = "Environmental Control - General")]
         [UI_FloatRange(minValue = 10f, maxValue = 30f, stepIncrement = 0.5f, scene = UI_Scene.All)]
         public float thermostatTemp = 22f;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = false, guiName = "Cabin Temperature", groupName = "KICKTEMP", groupDisplayName = "EnCon - General", guiFormat = "F1", guiUnits = " C")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = false, guiName = "Cabin Temperature", groupName = "KICKTEMP", groupDisplayName = "Environmental Control - General", guiFormat = "F1", guiUnits = " C")]
         public float cabinTemp = 0f;
 
         [KSPField(isPersistant = true)]
         public bool thermalStateInitialized = false;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Part Temperature", groupName = "KICKTEMP", groupDisplayName = "EnCon - General", guiFormat = "F1", guiUnits = " C")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Part Temperature", groupName = "KICKTEMP", groupDisplayName = "Environmental Control - General", guiFormat = "F1", guiUnits = " C")]
         public float partTempDisplay = 0f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Cabin-Part Flux", groupName = "KICKFLUX", groupDisplayName = "EnCon - Flux", groupStartCollapsed = true, guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Situation", groupName = "KICKTEMP", groupDisplayName = "Environmental Control - General")]
+        public string climateControlStatus = "On";
+
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Cabin-Part Flux", groupName = "KICKFLUX", groupDisplayName = "Environmental Control - Flux", groupStartCollapsed = true, guiFormat = "F3", guiUnits = " kW")]
         public float cabinPartFlux = 0f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Onboard Heat", groupName = "KICKFLUX", groupDisplayName = "EnCon - Flux", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Onboard Heat", groupName = "KICKFLUX", groupDisplayName = "Environmental Control - Flux", guiFormat = "F3", guiUnits = " kW")]
         public float onboardHeatFlux = 0f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Active Control", groupName = "KICKFLUX", groupDisplayName = "EnCon - Flux", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Active Control", groupName = "KICKFLUX", groupDisplayName = "Environmental Control - Flux", guiFormat = "F3", guiUnits = " kW")]
         public float activeControlFlux = 0f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Net Flux", groupName = "KICKFLUX", groupDisplayName = "EnCon - Flux", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Net Flux", groupName = "KICKFLUX", groupDisplayName = "Environmental Control - Flux", guiFormat = "F3", guiUnits = " kW")]
         public float effectiveFlux = 0f;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Heater", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Master Switch", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        public bool climateControlEnabled = true;
+
+        [KSPField(guiActive = true, guiActiveEditor = true, guiName = "Installed System", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems")]
+        public string installedCoolingSystem = "Passive";
+
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "EC Limit", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        [UI_FloatRange(minValue = 0f, maxValue = 1f, stepIncrement = 0.01f, scene = UI_Scene.All)]
+        public float enconECLimit = 1f;
+
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Basic Package", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        public float enconBaseECDisplay = 0f;
+
+        [KSPField(guiActive = false, guiActiveEditor = false, guiName = "Equipment EC", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        public float enconEquipmentECDisplay = 0f;
+
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Heater", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool heaterEnabled = true;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Created", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heater Heat Generated", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " kW")]
         public float heaterOutput = 0f;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Evaporator", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heater EC", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        public float heaterECDisplay = 0f;
+
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Evaporator", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool evaporatorEnabled = true;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Evaporator Feed", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Evaporator Feed", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems")]
         [UI_ChooseOption(scene = UI_Scene.All, options = new[] { "Waste First", "Waste Only", "Fresh First", "Fresh Only" })]
         public string evaporatorFeedMode = "Waste First";
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Water Limit", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F6", guiUnits = " L/s")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Water Limit", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F6", guiUnits = " L/s")]
         [UI_FloatRange(minValue = 0f, maxValue = 0.001f, stepIncrement = 0.00001f, scene = UI_Scene.All)]
         public float waterEvaporatorWaterLimit = 0.000435f;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Water Use", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F6", guiUnits = " L/s")]
-        public float evaporatorFreshWaterUseDisplay = 0f;
-
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Waste Water Use", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F6", guiUnits = " L/s")]
-        public float evaporatorWasteWaterUseDisplay = 0f;
-
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Removed", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Removed", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " kW")]
         public float evaporatorOutput = 0f;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Air Cooling", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Evaporator EC", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        public float evaporatorECDisplay = 0f;
+
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Fresh Water Use", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F6", guiUnits = " L/s")]
+        public float evaporatorFreshWaterUseDisplay = 0f;
+
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Waste Water Use", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F6", guiUnits = " L/s")]
+        public float evaporatorWasteWaterUseDisplay = 0f;
+
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Air Cooling", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool airCoolingEnabled = true;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Removed", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Removed", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " kW")]
         public float airCoolingOutput = 0f;
 
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Heat Pump", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Air Cooler EC", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        public float airCoolingECDisplay = 0f;
+
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Air Cooler Efficiency", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F0", guiUnits = "%")]
+        public float airCoolingEfficiencyDisplay = 0f;
+
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Heat Pump", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool heatPumpEnabled = true;
 
-        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Removed", groupName = "KICKTHERM", groupDisplayName = "EnCon - Systems", guiFormat = "F3", guiUnits = " kW")]
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Removed", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " kW")]
         public float heatPumpOutput = 0f;
+
+        [KSPField(guiActive = true, guiActiveEditor = false, guiName = "Heat Pump EC", groupName = "KICKTHERM", groupDisplayName = "Environmental Control - Systems", guiFormat = "F3", guiUnits = " EC/s")]
+        public float heatPumpECDisplay = 0f;
 
         [KSPField(guiActive = false, guiActiveEditor = false, guiName = "Food", groupName = "KICKNUTRITION", groupDisplayName = "Nutrition")]
         public string nutritionFoodReport = "Available";
@@ -109,21 +131,18 @@ namespace KickLifeSupport
         [KSPField] public float systemECRate = 0.03f;
         [KSPField] public float systemHeat = 0.03f;
         [KSPField] public float enconMaxECRate = 1f;
-        [KSPField] public float heaterMaxECRate = 1f;
+        [KSPField] public float heaterMaxECRatePerSeat = 1f;
         [KSPField] public float heaterHeatPerEC = 1f;
-        [KSPField] public float heatPumpMaxECRate = 0.1f;
-        [KSPField] public float heatPumpHeatPerEC = 10f;
-        [KSPField] public float waterEvaporatorMaxECRate = 0.01f;
-        [KSPField] public float waterEvaporatorHeatPerEC = 100f;
-        [KSPField] public float waterEvaporatorMaxWaterRate = 0.000435f;
-        [KSPField] public float airCoolingMaxECRate = 0.05f;
-        [KSPField] public float airCoolingHeatPerEC = 5f;
+        [KSPField(isPersistant = true)] public int coolingSystemMode = CoolingSystemNone;
+        [KSPField(isPersistant = true)] public string coolingSystemName = "";
+        [KSPField] public float coolingMaxECRatePerSeat = 0f;
+        [KSPField] public float coolingHeatPerEC = 0f;
+        [KSPField] public float coolingMaxWaterRatePerSeat = 0f;
+        [KSPField] public float coolingPressureMinimumKPa = 0f;
+        [KSPField] public float coolingPressureFullKPa = 0f;
         [KSPField] public float heatPumpLoopNominalTemp = 320f;
         [KSPField] public float heatPumpLoopMaxTemp = 370f;
         [KSPField] public string heatPumpSystemHeatModuleID = "kickECS";
-        [KSPField] public bool heatPumpAvailable = true;
-        [KSPField] public bool waterEvaporatorAvailable = false;
-        [KSPField] public bool airCoolingAvailable = false;
         float systemHeatFluxEstimate = 0f;
         #endregion
 
@@ -136,6 +155,10 @@ namespace KickLifeSupport
         double wasteWaterResidueUnitsPerUnit;
         double cachedAnalyticTemp;
         double currentTemperatureControlECRate;
+        double currentHeaterECRate;
+        double currentEvaporatorECRate;
+        double currentAirCoolingECRate;
+        double currentHeatPumpECRate;
         double lastThermalLogTime = -999;
         double lastAnalyticLogTime = -999;
         float lastEditorSystemHeatFlux = float.NaN;
@@ -182,9 +205,6 @@ namespace KickLifeSupport
         double configuredWasteWaterCoolingFactor;
         double configuredWasteWaterResidueMassFraction;
         double configuredEvaporationEnergyKJPerUnit;
-        double configuredWaterEvaporatorPressureLimitKPa;
-        double configuredAirCoolingMinPressureKPa;
-        double configuredAirCoolingFullPressureKPa;
         float configuredHighWarpStabilizationThreshold;
         float configuredMinSafeCabinTemp;
         float configuredMaxSafeCabinTemp;
@@ -233,14 +253,6 @@ namespace KickLifeSupport
                 KickLifeSupportConfig.GetDouble("WASTEWATER_RESIDUE_MASS_FRACTION", 0.2);
             configuredEvaporationEnergyKJPerUnit =
                 KickLifeSupportConfig.GetDouble("EVAPORATION_ENERGY_KJ_PER_UNIT", 2300);
-            configuredWaterEvaporatorPressureLimitKPa =
-                KickLifeSupportConfig.GetDouble(
-                    "WATER_EVAPORATOR_PRESSURE_LIMIT",
-                    0.6);
-            configuredAirCoolingMinPressureKPa =
-                KickLifeSupportConfig.GetDouble("AIR_COOLING_MIN_PRESSURE", 1.0);
-            configuredAirCoolingFullPressureKPa =
-                KickLifeSupportConfig.GetDouble("AIR_COOLING_FULL_PRESSURE", 20.0);
             configuredHighWarpStabilizationThreshold =
                 KickLifeSupportConfig.GetFloat("HIGH_WARP_STABILIZATION_THRESHOLD", 100f);
             configuredMinSafeCabinTemp =
@@ -262,11 +274,6 @@ namespace KickLifeSupport
                 Math.Max(configuredWasteWaterResidueMassFraction, 0);
             configuredEvaporationEnergyKJPerUnit =
                 Math.Max(configuredEvaporationEnergyKJPerUnit, 0.000001);
-            configuredWaterEvaporatorPressureLimitKPa =
-                Math.Max(configuredWaterEvaporatorPressureLimitKPa, 0);
-            configuredAirCoolingFullPressureKPa = Math.Max(
-                configuredAirCoolingFullPressureKPa,
-                configuredAirCoolingMinPressureKPa + 0.000001);
 
             float thermostatMin =
                 KickLifeSupportConfig.GetFloat("THERMOSTAT_MIN", 10f);
@@ -285,7 +292,7 @@ namespace KickLifeSupport
             ConfigureFloatRange(
                 "waterEvaporatorWaterLimit",
                 0,
-                Math.Max(waterEvaporatorMaxWaterRate, 0),
+                (float)Math.Max(GetCoolingMaxWaterRate(), 0),
                 KickLifeSupportConfig.GetFloat(
                     "EVAPORATOR_WATER_LIMIT_STEP",
                     0.00005f));
@@ -300,7 +307,7 @@ namespace KickLifeSupport
                 0,
                 GetFloatRangeMaximum(
                     "waterEvaporatorWaterLimit",
-                    waterEvaporatorMaxWaterRate));
+                    (float)GetCoolingMaxWaterRate()));
         }
 
         void ConfigureFloatRange(
@@ -334,6 +341,94 @@ namespace KickLifeSupport
             UI_FloatRange flight = field.uiControlFlight as UI_FloatRange;
             if (HighLogic.LoadedSceneIsEditor && editor != null) return editor.maxValue;
             return flight != null ? flight.maxValue : fallback;
+        }
+
+        int GetThermalSeatCount()
+        {
+            if (part == null) return 1;
+            return part.CrewCapacity > 0 ? part.CrewCapacity : 1;
+        }
+
+        int GetResolvedCoolingSystemMode()
+        {
+            if (coolingSystemMode == 3)
+            {
+                return CoolingSystemCoolantLoop;
+            }
+
+            if (coolingSystemMode == 2 && GetCoolingMaxWaterRate() > 0.0000001)
+            {
+                return CoolingSystemIntegrated;
+            }
+
+            return coolingSystemMode;
+        }
+
+        bool UsesIntegratedCooling()
+        {
+            return GetResolvedCoolingSystemMode() == CoolingSystemIntegrated;
+        }
+
+        bool UsesConsumableIntegratedCooling()
+        {
+            return UsesIntegratedCooling() && GetCoolingMaxWaterRate() > 0.0000001;
+        }
+
+        bool UsesAtmosphericIntegratedCooling()
+        {
+            return UsesIntegratedCooling() && !UsesConsumableIntegratedCooling();
+        }
+
+        bool UsesCoolantLoop()
+        {
+            return GetResolvedCoolingSystemMode() == CoolingSystemCoolantLoop;
+        }
+
+        bool HasCoolingSystem()
+        {
+            return GetResolvedCoolingSystemMode() != CoolingSystemNone &&
+                   GetCoolingMaxECRate() > 0;
+        }
+
+        string GetCoolingSystemDisplayName()
+        {
+            if (!string.IsNullOrEmpty(coolingSystemName))
+            {
+                return coolingSystemName;
+            }
+
+            switch (GetResolvedCoolingSystemMode())
+            {
+                case CoolingSystemIntegrated:
+                    return "Integrated Cooling";
+                case CoolingSystemCoolantLoop:
+                    return "Coolant Loop";
+                default:
+                    return "Cooling";
+            }
+        }
+
+        double GetHeaterMaxECRate()
+        {
+            return GetThermalSeatCount() * Math.Max(heaterMaxECRatePerSeat, 0);
+        }
+
+        double GetCoolingMaxECRate()
+        {
+            return GetThermalSeatCount() * Math.Max(coolingMaxECRatePerSeat, 0);
+        }
+
+        double GetCoolingMaxWaterRate()
+        {
+            return GetThermalSeatCount() * Math.Max(coolingMaxWaterRatePerSeat, 0);
+        }
+
+        bool IsCoolingEnabled()
+        {
+            if (UsesConsumableIntegratedCooling()) return evaporatorEnabled;
+            if (UsesAtmosphericIntegratedCooling()) return airCoolingEnabled;
+            if (UsesCoolantLoop()) return heatPumpEnabled;
+            return false;
         }
 
         void ThermalOnUpdate()
@@ -388,6 +483,10 @@ namespace KickLifeSupport
             debugCabinToPartKW = 0;
             debugCabinPartConductance = 0;
             debugStockPartFluxKW = 0;
+            currentHeaterECRate = 0;
+            currentEvaporatorECRate = 0;
+            currentAirCoolingECRate = 0;
+            currentHeatPumpECRate = 0;
             heaterOutput = 0;
             evaporatorOutput = 0;
             airCoolingOutput = 0;
@@ -441,11 +540,21 @@ namespace KickLifeSupport
                 currentTemperatureControlECRate -
                 Math.Max(systemECRate, 0),
                 0);
+            heaterECDisplay = (float)(
+                Math.Max(currentHeaterECRate, 0));
+            evaporatorECDisplay =
+                (float)Math.Max(currentEvaporatorECRate, 0);
+            airCoolingECDisplay =
+                (float)Math.Max(currentAirCoolingECRate, 0);
+            heatPumpECDisplay =
+                (float)Math.Max(currentHeatPumpECRate, 0);
             evaporatorFreshWaterUseDisplay = (float)Math.Max(
                 debugWaterEvaporatorRate - debugWasteWaterRate,
                 0);
             evaporatorWasteWaterUseDisplay =
                 (float)Math.Max(debugWasteWaterRate, 0);
+            airCoolingEfficiencyDisplay =
+                (float)(Math.Max(debugAirCoolingPressureFactor, 0) * 100.0);
             cabinPartFlux = (float)(-debugCabinToPartKW);
             onboardHeatFlux = (float)(
                 debugAvionicsHeat +
@@ -469,11 +578,22 @@ namespace KickLifeSupport
 
         void RefreshCapabilityControls()
         {
+            installedCoolingSystem = GetCoolingSystemDisplayName();
             Fields["climateControlEnabled"].guiName = "Master Switch";
             Fields["heaterEnabled"].guiName = "Heater";
-            Fields["evaporatorEnabled"].guiName = "Evaporator";
-            Fields["airCoolingEnabled"].guiName = "Air Cooling";
-            Fields["heatPumpEnabled"].guiName = "Heat Pump";
+            Fields["installedCoolingSystem"].guiActive = true;
+            Fields["installedCoolingSystem"].guiActiveEditor = true;
+            Fields["evaporatorEnabled"].guiName = "Cooling";
+            Fields["airCoolingEnabled"].guiName = "Cooling";
+            Fields["heatPumpEnabled"].guiName = "Cooling";
+            Fields["climateControlStatus"].guiName = "Situation";
+            ConfigureFloatRange(
+                "waterEvaporatorWaterLimit",
+                0,
+                (float)Math.Max(GetCoolingMaxWaterRate(), 0),
+                KickLifeSupportConfig.GetFloat(
+                    "EVAPORATOR_WATER_LIMIT_STEP",
+                    0.00005f));
             bool enconBaseECLacking =
                 HighLogic.LoadedSceneIsFlight &&
                 climateControlEnabled &&
@@ -485,8 +605,8 @@ namespace KickLifeSupport
                 waterEvaporatorStatus == "No Power" ||
                 airCoolingStatus == "No Power";
             Fields["enconBaseECDisplay"].guiName = enconBaseECLacking
-                ? KickUIFormat.Bad("Base EC Cost (No Electricity)")
-                : "Base EC Cost";
+                ? KickUIFormat.Bad("Basic Package (No Electricity)")
+                : "Basic Package";
             Fields["enconEquipmentECDisplay"].guiName =
                 enconEquipmentECLacking
                     ? KickUIFormat.Bad("Equipment EC (No Electricity)")
@@ -497,12 +617,29 @@ namespace KickLifeSupport
             bool wasteOnly = evaporatorFeedMode == "Waste Only";
             Fields["evaporatorFreshWaterUseDisplay"].guiName =
                 noEvaporatorFeed && !wasteOnly
-                    ? KickUIFormat.Bad("Water Use (Unavailable)")
-                    : "Water Use";
+                    ? KickUIFormat.Bad("Fresh Water Use (Unavailable)")
+                    : "Fresh Water Use";
             Fields["evaporatorWasteWaterUseDisplay"].guiName =
                 noEvaporatorFeed && !freshOnly
                     ? KickUIFormat.Bad("Waste Water Use (Unavailable)")
                     : "Waste Water Use";
+            Fields["heaterECDisplay"].guiName =
+                heaterStatus == "No Power"
+                    ? KickUIFormat.Bad("Heater EC (No Electricity)")
+                    : "Heater EC";
+            Fields["evaporatorECDisplay"].guiName =
+                waterEvaporatorStatus == "No Power"
+                    ? KickUIFormat.Bad("Cooling EC (No Electricity)")
+                    : "Cooling EC";
+            Fields["airCoolingECDisplay"].guiName =
+                airCoolingStatus == "No Power"
+                    ? KickUIFormat.Bad("Cooling EC (No Electricity)")
+                    : "Cooling EC";
+            Fields["heatPumpECDisplay"].guiName =
+                heatPumpStatus == "No Power"
+                    ? KickUIFormat.Bad("Cooling EC (No Electricity)")
+                    : "Cooling EC";
+            Fields["airCoolingEfficiencyDisplay"].guiName = "Cooling Efficiency";
             Fields["cabinTemp"].guiName =
                 cabinTemp < configuredMinSafeCabinTemp ||
                 cabinTemp > configuredMaxSafeCabinTemp
@@ -531,22 +668,38 @@ namespace KickLifeSupport
             Fields["effectiveFlux"].guiActive = true;
             Fields["heaterEnabled"].guiActive = true;
             Fields["heaterEnabled"].guiActiveEditor = true;
-            Fields["heaterOutput"].guiActive = heaterOutput > 0.0005f;
-            Fields["evaporatorEnabled"].guiActive = waterEvaporatorAvailable;
-            Fields["evaporatorEnabled"].guiActiveEditor = waterEvaporatorAvailable;
-            Fields["evaporatorFeedMode"].guiActive = waterEvaporatorAvailable;
-            Fields["evaporatorFeedMode"].guiActiveEditor = waterEvaporatorAvailable;
-            Fields["heatPumpEnabled"].guiActive = heatPumpAvailable;
-            Fields["heatPumpEnabled"].guiActiveEditor = heatPumpAvailable;
-            Fields["heatPumpOutput"].guiActive = heatPumpAvailable;
-            Fields["waterEvaporatorWaterLimit"].guiActive = waterEvaporatorAvailable;
-            Fields["waterEvaporatorWaterLimit"].guiActiveEditor = waterEvaporatorAvailable;
-            Fields["evaporatorFreshWaterUseDisplay"].guiActive = waterEvaporatorAvailable;
-            Fields["evaporatorWasteWaterUseDisplay"].guiActive = waterEvaporatorAvailable;
-            Fields["evaporatorOutput"].guiActive = waterEvaporatorAvailable;
-            Fields["airCoolingEnabled"].guiActive = airCoolingAvailable;
-            Fields["airCoolingEnabled"].guiActiveEditor = airCoolingAvailable;
-            Fields["airCoolingOutput"].guiActive = airCoolingAvailable;
+            Fields["heaterOutput"].guiActive = heaterEnabled;
+            Fields["heaterECDisplay"].guiActive = heaterEnabled;
+            Fields["evaporatorEnabled"].guiActive = UsesConsumableIntegratedCooling();
+            Fields["evaporatorEnabled"].guiActiveEditor = UsesConsumableIntegratedCooling();
+            Fields["evaporatorFeedMode"].guiActive =
+                UsesConsumableIntegratedCooling() && evaporatorEnabled;
+            Fields["evaporatorFeedMode"].guiActiveEditor = UsesConsumableIntegratedCooling();
+            Fields["heatPumpEnabled"].guiActive = UsesCoolantLoop();
+            Fields["heatPumpEnabled"].guiActiveEditor = UsesCoolantLoop();
+            Fields["heatPumpOutput"].guiActive =
+                UsesCoolantLoop() && heatPumpEnabled;
+            Fields["heatPumpECDisplay"].guiActive =
+                UsesCoolantLoop() && heatPumpEnabled;
+            Fields["waterEvaporatorWaterLimit"].guiActive =
+                UsesConsumableIntegratedCooling() && evaporatorEnabled;
+            Fields["waterEvaporatorWaterLimit"].guiActiveEditor = UsesConsumableIntegratedCooling();
+            Fields["evaporatorFreshWaterUseDisplay"].guiActive =
+                UsesConsumableIntegratedCooling() && evaporatorEnabled;
+            Fields["evaporatorWasteWaterUseDisplay"].guiActive =
+                UsesConsumableIntegratedCooling() && evaporatorEnabled;
+            Fields["evaporatorOutput"].guiActive =
+                UsesConsumableIntegratedCooling() && evaporatorEnabled;
+            Fields["evaporatorECDisplay"].guiActive =
+                UsesConsumableIntegratedCooling() && evaporatorEnabled;
+            Fields["airCoolingEnabled"].guiActive = UsesAtmosphericIntegratedCooling();
+            Fields["airCoolingEnabled"].guiActiveEditor = UsesAtmosphericIntegratedCooling();
+            Fields["airCoolingOutput"].guiActive =
+                UsesAtmosphericIntegratedCooling() && airCoolingEnabled;
+            Fields["airCoolingECDisplay"].guiActive =
+                UsesAtmosphericIntegratedCooling() && airCoolingEnabled;
+            Fields["airCoolingEfficiencyDisplay"].guiActive =
+                UsesAtmosphericIntegratedCooling() && airCoolingEnabled;
 
             bool hasCrew = part != null && part.protoModuleCrew.Count > 0;
             Fields["nutritionFoodReport"].guiActive =
@@ -582,7 +735,6 @@ namespace KickLifeSupport
             if (airCoolingStatus == "No Atmosphere") return KickUIFormat.Bad("Heat Removed (No Atmosphere)");
             if (airCoolingStatus == "No Power") return KickUIFormat.Bad("Heat Removed (No Power)");
             if (airCoolingStatus == "EC Limit") return KickUIFormat.Warning("Heat Removed (No EC Budget)");
-            if (airCoolingEnvironmentLimited) return KickUIFormat.Warning("Heat Removed (Thin Atmosphere)");
             if (airCoolingAtSetLimit) return KickUIFormat.Warning("Heat Removed (At EC Limit)");
             if (airCoolingEquipmentLimited) return KickUIFormat.Warning("Heat Removed (At System Capacity)");
             return "Heat Removed";
@@ -627,17 +779,17 @@ namespace KickLifeSupport
                 Math.Max(enconMaxECRate, 0));
             double controlRate = Math.Max(systemECRate, 0);
             double heaterRate = heaterEnabled
-                ? Math.Max(heaterMaxECRate, 0)
+                ? GetHeaterMaxECRate()
                 : 0;
             double coolingRate = 0;
-            if (waterEvaporatorAvailable && evaporatorEnabled)
-                coolingRate = Math.Max(waterEvaporatorMaxECRate, 0);
-            else if (airCoolingAvailable && airCoolingEnabled)
-                coolingRate = Math.Max(airCoolingMaxECRate, 0);
-            else if (heatPumpAvailable &&
+            if (UsesConsumableIntegratedCooling() && evaporatorEnabled)
+                coolingRate = GetCoolingMaxECRate();
+            else if (UsesAtmosphericIntegratedCooling() && airCoolingEnabled)
+                coolingRate = GetCoolingMaxECRate();
+            else if (UsesCoolantLoop() &&
                      heatPumpEnabled &&
                      IsSystemHeatLoopAvailable(GetSystemHeatModule()))
-                coolingRate = Math.Max(heatPumpMaxECRate, 0);
+                coolingRate = GetCoolingMaxECRate();
 
             return (float)(
                 controlRate +
@@ -646,7 +798,7 @@ namespace KickLifeSupport
 
         float GetEditorSystemHeatFluxEstimate()
         {
-            if (!heatPumpAvailable || !heatPumpEnabled) return 0;
+            if (!UsesCoolantLoop() || !heatPumpEnabled) return 0;
 
             double budget = Math.Min(
                 Math.Max(enconECLimit, 0),
@@ -658,13 +810,13 @@ namespace KickLifeSupport
 
             double heatPumpRate = Math.Min(
                 budget,
-                Math.Max(heatPumpMaxECRate, 0));
+                GetCoolingMaxECRate());
             double loopTemperature = GetSystemHeatLoopTemperature(heatModule);
             double loopFactor = loopTemperature > 0
                 ? GetHeatPumpLoopFactor(loopTemperature)
                 : 1;
             double heatMovedKW =
-                heatPumpRate * Math.Max(heatPumpHeatPerEC, 0) * loopFactor;
+                heatPumpRate * Math.Max(coolingHeatPerEC, 0) * loopFactor;
             double wasteKW = heatPumpRate;
             return (float)(heatMovedKW + wasteKW);
         }
@@ -674,24 +826,23 @@ namespace KickLifeSupport
             KickLifeSupportScenario scenario = KickLifeSupportScenario.Instance;
             if (scenario == null)
             {
-                climateControlStatus = KickUIFormat.ReportLine(KickUIFormat.Good("Safe Temperature"));
+                climateControlStatus = KickUIFormat.Good("Safe Temperature");
                 return;
             }
 
-            LifeSupportStatus status = vessel != null ? scenario.GetData(vessel.id) : null;
             if (cabinTemp < configuredMinSafeCabinTemp)
             {
-                double remaining = status != null ? scenario.GraceTemp - status.tempRangeTime : scenario.GraceTemp;
-                climateControlStatus = KickUIFormat.ReportLine(KickUIFormat.Bad($"Too Cold ({KickUIFormat.Timer(remaining)})"));
+                double remaining = scenario.GraceTemp - tempRangeTime;
+                climateControlStatus = KickUIFormat.Bad($"Too Cold ({KickUIFormat.Timer(remaining)})");
             }
             else if (cabinTemp > configuredMaxSafeCabinTemp)
             {
-                double remaining = status != null ? scenario.GraceTemp - status.tempRangeTime : scenario.GraceTemp;
-                climateControlStatus = KickUIFormat.ReportLine(KickUIFormat.Bad($"Too Hot ({KickUIFormat.Timer(remaining)})"));
+                double remaining = scenario.GraceTemp - tempRangeTime;
+                climateControlStatus = KickUIFormat.Bad($"Too Hot ({KickUIFormat.Timer(remaining)})");
             }
             else
             {
-                climateControlStatus = KickUIFormat.ReportLine(KickUIFormat.Good("Safe Temperature"));
+                climateControlStatus = KickUIFormat.Good("Safe Temperature");
             }
         }
 
@@ -751,19 +902,21 @@ namespace KickLifeSupport
 
         double GetWaterEvaporatorPressureFactor(double pressureKPa)
         {
-            return pressureKPa < configuredWaterEvaporatorPressureLimitKPa
+            double pressureLimit = Math.Max(coolingPressureMinimumKPa, 0);
+            return pressureKPa < pressureLimit
                 ? 1
                 : 0;
         }
 
         double GetAirCoolingPressureFactor(double pressureKPa)
         {
-            if (pressureKPa <= configuredAirCoolingMinPressureKPa) return 0;
-            if (pressureKPa >= configuredAirCoolingFullPressureKPa) return 1;
+            double minimum = Math.Max(coolingPressureMinimumKPa, 0);
+            double full = Math.Max(coolingPressureFullKPa, minimum + 0.000001f);
+            if (pressureKPa <= minimum) return 0;
+            if (pressureKPa >= full) return 1;
 
-            return Clamp01((pressureKPa - configuredAirCoolingMinPressureKPa) /
-                (configuredAirCoolingFullPressureKPa -
-                    configuredAirCoolingMinPressureKPa));
+            return Clamp01((pressureKPa - minimum) /
+                (full - minimum));
         }
 
         void ResolveSystemHeatModule()
@@ -774,6 +927,7 @@ namespace KickLifeSupport
         void SyncSystemHeatAvailability()
         {
             ModuleSystemHeat heatModule = GetSystemHeatModule();
+            bool heatPumpAvailable = UsesCoolantLoop();
             if (heatModule == null || heatModule.moduleUsed == heatPumpAvailable) return;
 
             if (!heatPumpAvailable)
@@ -821,7 +975,7 @@ namespace KickLifeSupport
         bool SetSystemHeatPumpFlux(double sourceTempK, double fluxKW, bool useForNominal)
         {
             ModuleSystemHeat heatModule = GetSystemHeatModule();
-            if (heatModule == null || (!heatPumpAvailable && fluxKW > 0)) return false;
+            if (heatModule == null || (!UsesCoolantLoop() && fluxKW > 0)) return false;
 
             heatModule.AddFlux("kickHeatPump", (float)sourceTempK, (float)fluxKW, useForNominal);
             debugHeatPumpLoopTemp = GetSystemHeatLoopTemperature(heatModule);
@@ -873,7 +1027,7 @@ namespace KickLifeSupport
             if (TimeWarp.CurrentRate > configuredHighWarpStabilizationThreshold)
             {
                 SetSystemHeatPumpFlux(0, 0, false);
-                if (heatPumpAvailable && heatPumpEnabled && cabinTemp > thermostatTemp &&
+                if (UsesCoolantLoop() && heatPumpEnabled && cabinTemp > thermostatTemp &&
                     !HasSystemHeatRadiator(GetSystemHeatModule()))
                 {
                     heatPumpStatus = "No Radiator";
@@ -890,20 +1044,20 @@ namespace KickLifeSupport
                         bool canHeat =
                             hasEquipmentBudget &&
                             heaterEnabled &&
-                            heaterMaxECRate > 0 &&
+                            GetHeaterMaxECRate() > 0 &&
                             cabinTemp < thermostatTemp;
                         bool canCool =
                             hasEquipmentBudget &&
-                            ((waterEvaporatorAvailable &&
+                            ((UsesConsumableIntegratedCooling() &&
                               evaporatorEnabled &&
-                              waterEvaporatorMaxECRate > 0 &&
+                              GetCoolingMaxECRate() > 0 &&
                               waterEvaporatorWaterLimit > 0) ||
-                             (airCoolingAvailable &&
+                             (UsesAtmosphericIntegratedCooling() &&
                               airCoolingEnabled &&
-                              airCoolingMaxECRate > 0) ||
-                             (heatPumpAvailable &&
+                              GetCoolingMaxECRate() > 0) ||
+                             (UsesCoolantLoop() &&
                               heatPumpEnabled &&
-                              heatPumpMaxECRate > 0));
+                              GetCoolingMaxECRate() > 0));
                         if (canHeat || (canCool && cabinTemp > thermostatTemp))
                         {
                             cabinTemp = thermostatTemp;
@@ -960,23 +1114,8 @@ namespace KickLifeSupport
             double passiveChange = 0;
             double hullTemp = part.temperature;
 
-            if (lifeSupport != null &&
-                lifeSupport.atmosphereControlMode == KickLifeSupportModule.AtmosphereControlNone)
-            {
-                debugCabinPartConductance =
-                    Math.Max(unpressurizedCabinPartConductance, 0);
-            }
-            else if (lifeSupport != null &&
-                     KickLifeSupportModule.UsesOpenLoopVentilation(lifeSupport.atmosphereControlMode))
-            {
-                debugCabinPartConductance =
-                    Math.Max(openLoopCabinPartConductance, 0);
-            }
-            else
-            {
-                debugCabinPartConductance =
-                    Math.Max(pressurizedCabinPartConductance, 0);
-            }
+            debugCabinPartConductance =
+                Math.Max(cabinPartConductance, 0);
             debugCabinPartConductance *= GetCabinConductanceScale();
 
             if (dt > 0 && cabinHeatCapacity > 0)
@@ -1000,7 +1139,7 @@ namespace KickLifeSupport
                 double heaterECBudget = heaterEnabled
                     ? Math.Min(
                         remainingEquipmentECRate,
-                        Math.Max(heaterMaxECRate, 0))
+                        GetHeaterMaxECRate())
                     : 0;
                 double heaterLimitKW =
                     heaterECBudget * Math.Max(heaterHeatPerEC, 0);
@@ -1018,6 +1157,7 @@ namespace KickLifeSupport
                     }
                     else
                     {
+                        currentHeaterECRate = heaterECRate;
                         currentTemperatureControlECRate += heaterECRate;
                         remainingEquipmentECRate =
                             Math.Max(remainingEquipmentECRate - heaterECRate, 0);
@@ -1031,7 +1171,7 @@ namespace KickLifeSupport
                 }
 
                 double requestedActiveCoolingKW = GetCoolingToTargetKW(projectedCabinTempK, targetTempK, cabinHeatCapacity, dt);
-                if (waterEvaporatorAvailable && evaporatorEnabled)
+                if (UsesConsumableIntegratedCooling() && evaporatorEnabled)
                 {
                     SetSystemHeatPumpFlux(0, 0, false);
                     systemHeatFluxEstimate = 0;
@@ -1050,9 +1190,9 @@ namespace KickLifeSupport
                         {
                             double evaporatorECBudget = Math.Min(
                                 remainingEquipmentECRate,
-                                Math.Max(waterEvaporatorMaxECRate, 0));
+                                GetCoolingMaxECRate());
                             double evaporatorHeatPerEC =
-                                Math.Max(waterEvaporatorHeatPerEC, 0);
+                                Math.Max(coolingHeatPerEC, 0);
                             double evaporatorLimitKW =
                                 evaporatorECBudget *
                                 evaporatorHeatPerEC *
@@ -1067,7 +1207,7 @@ namespace KickLifeSupport
                             evaporatorAtSetLimit =
                                 evaporatorDemandLimited &&
                                 remainingEquipmentECRate + 0.000001 <
-                                    Math.Max(waterEvaporatorMaxECRate, 0);
+                                    GetCoolingMaxECRate();
                             evaporatorEquipmentLimited =
                                 evaporatorDemandLimited &&
                                 !evaporatorAtSetLimit;
@@ -1221,6 +1361,8 @@ namespace KickLifeSupport
                                         }
                                         else
                                         {
+                                            currentEvaporatorECRate =
+                                                evaporatorECPerSecond;
                                             currentTemperatureControlECRate += evaporatorECPerSecond;
                                             remainingEquipmentECRate = Math.Max(
                                                 remainingEquipmentECRate -
@@ -1252,7 +1394,7 @@ namespace KickLifeSupport
                         }
                     }
                 }
-                else if (airCoolingAvailable && airCoolingEnabled)
+                else if (UsesAtmosphericIntegratedCooling() && airCoolingEnabled)
                 {
                     SetSystemHeatPumpFlux(0, 0, false);
                     systemHeatFluxEstimate = 0;
@@ -1271,9 +1413,9 @@ namespace KickLifeSupport
                         {
                             double airCoolingECBudget = Math.Min(
                                 remainingEquipmentECRate,
-                                Math.Max(airCoolingMaxECRate, 0));
+                                GetCoolingMaxECRate());
                             double airCoolingPerformance =
-                                Math.Max(airCoolingHeatPerEC, 0) *
+                                Math.Max(coolingHeatPerEC, 0) *
                                 pressureFactor;
                             double coolingLimitKW =
                                 airCoolingECBudget * airCoolingPerformance;
@@ -1286,7 +1428,7 @@ namespace KickLifeSupport
                             airCoolingAtSetLimit =
                                 airCoolingDemandLimited &&
                                 remainingEquipmentECRate + 0.000001 <
-                                    Math.Max(airCoolingMaxECRate, 0);
+                                    GetCoolingMaxECRate();
                             airCoolingEquipmentLimited =
                                 airCoolingDemandLimited &&
                                 !airCoolingAtSetLimit;
@@ -1307,6 +1449,8 @@ namespace KickLifeSupport
                                 }
                                 else
                                 {
+                                    currentAirCoolingECRate =
+                                        airCoolingECPerSecond;
                                     currentTemperatureControlECRate +=
                                         airCoolingECPerSecond;
                                     remainingEquipmentECRate = Math.Max(
@@ -1332,7 +1476,7 @@ namespace KickLifeSupport
                         }
                     }
                 }
-                else if (heatPumpAvailable && heatPumpEnabled)
+                else if (UsesCoolantLoop() && heatPumpEnabled)
                 {
                     if (requestedActiveCoolingKW > 0.000001 && cabinHeatCapacity > 0)
                     {
@@ -1365,9 +1509,9 @@ namespace KickLifeSupport
                             {
                                 double heatPumpECBudget = Math.Min(
                                     remainingEquipmentECRate,
-                                    Math.Max(heatPumpMaxECRate, 0));
+                                    GetCoolingMaxECRate());
                                 double heatPumpPerformance =
-                                    Math.Max(heatPumpHeatPerEC, 0) *
+                                    Math.Max(coolingHeatPerEC, 0) *
                                     loopFactor;
                                 double heatPumpLimitKW =
                                     heatPumpECBudget * heatPumpPerformance;
@@ -1380,7 +1524,7 @@ namespace KickLifeSupport
                                 heatPumpAtSetLimit =
                                     heatPumpDemandLimited &&
                                     remainingEquipmentECRate + 0.000001 <
-                                        Math.Max(heatPumpMaxECRate, 0);
+                                        GetCoolingMaxECRate();
                                 heatPumpEquipmentLimited =
                                     heatPumpDemandLimited &&
                                     !heatPumpAtSetLimit;
@@ -1404,6 +1548,8 @@ namespace KickLifeSupport
                                             heatPumpECPerSecond;
                                         if (SetSystemHeatPumpFlux(projectedCabinTempK, transferKW + wasteHeatKW, true))
                                         {
+                                            currentHeatPumpECRate =
+                                                heatPumpECPerSecond;
                                             currentTemperatureControlECRate +=
                                                 heatPumpECPerSecond;
                                             remainingEquipmentECRate = Math.Max(

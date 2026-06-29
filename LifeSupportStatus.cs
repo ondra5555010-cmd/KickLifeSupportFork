@@ -32,8 +32,6 @@ namespace KickLifeSupport
         public double lastUpdateTime = 0;
 
         public double lastLiOHScrubAmount = 0f;
-        public double lastOpenLoopVentedAmount = 0f;
-        public double activeOpenLoopVentCapacity = 0f;
         public int activeLiOHScrubberCount = 0;
 
         public void Save(ConfigNode node)

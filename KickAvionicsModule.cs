@@ -5,8 +5,17 @@ namespace KickLifeSupport
     public class KickAvionicsModule : PartModule
     {
         #region Avionics GUI Fields
-        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Avionics", groupName = "KICKAV", groupDisplayName = "Avionics"), UI_Toggle(disabledText = "Off", enabledText = "On")]
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Master Switch", groupName = "KICKAV", groupDisplayName = "Avionics"), UI_Toggle(disabledText = "Off", enabledText = "On")]
         public bool avionicsEnabled = true;
+
+        [KSPField(guiActive = true, guiActiveEditor = true, guiName = "Basic Package", groupName = "KICKAV", groupDisplayName = "Avionics", guiFormat = "F3", guiUnits = " EC/s")]
+        public float avionicsBaseECDisplay = 0f;
+
+        [KSPField(guiActive = true, guiActiveEditor = true, guiName = "SAS Operations", groupName = "KICKAV", groupDisplayName = "Avionics", guiFormat = "F3", guiUnits = " EC/s")]
+        public float avionicsSASECDisplay = 0f;
+
+        [KSPField(guiActive = true, guiActiveEditor = true, guiName = "RCS Operations", groupName = "KICKAV", groupDisplayName = "Avionics", guiFormat = "F3", guiUnits = " EC/s")]
+        public float avionicsRCSECDisplay = 0f;
 
         [KSPField]
         public float dbsAvionicsECRate = 0f;
@@ -29,11 +38,13 @@ namespace KickLifeSupport
         {
             PartResourceDefinition ecDef = PartResourceLibrary.Instance.GetDefinition("ElectricCharge");
             if (ecDef != null) ecId = ecDef.id;
+            RefreshAvionicsUI();
             UpdateDBSAvionicsECRate();
         }
 
         public override void OnUpdate()
         {
+            RefreshAvionicsUI();
             UpdateDBSAvionicsECRate();
         }
 
@@ -41,6 +52,7 @@ namespace KickLifeSupport
         {
             if (!HighLogic.LoadedSceneIsEditor) return;
 
+            RefreshAvionicsUI();
             UpdateDBSAvionicsECRate();
         }
 
@@ -49,6 +61,9 @@ namespace KickLifeSupport
             if (!HighLogic.LoadedSceneIsFlight || vessel == null || !vessel.loaded) return;
 
             currentHeatFlux = 0;
+            avionicsBaseECDisplay = 0f;
+            avionicsSASECDisplay = 0f;
+            avionicsRCSECDisplay = 0f;
 
             double dt = TimeWarp.fixedDeltaTime;
             double avionicsEC = avionicsECRate * dt;
@@ -114,6 +129,7 @@ namespace KickLifeSupport
                     else
                     {
                         currentHeatFlux += avionicsHeat * 0.1;
+                        avionicsBaseECDisplay = avionicsECRate * 0.1f;
                     }
                 }
             }
@@ -134,6 +150,16 @@ namespace KickLifeSupport
                     if (vessel.ActionGroups[KSPActionGroup.RCS])
                         vessel.ActionGroups.SetGroup(KSPActionGroup.RCS, false);
                 }
+            }
+            else if (avionicsEnabled && !isHibernating)
+            {
+                avionicsBaseECDisplay = avionicsECRate;
+                avionicsSASECDisplay = vessel.ActionGroups[KSPActionGroup.SAS]
+                    ? sasECRate
+                    : 0f;
+                avionicsRCSECDisplay = vessel.ActionGroups[KSPActionGroup.RCS]
+                    ? rcsECRate
+                    : 0f;
             }
 
         }
@@ -176,10 +202,46 @@ namespace KickLifeSupport
                     isHibernating = cmd != null && cmd.hibernation;
                 }
 
-                estimate += isHibernating ? avionicsECRate * 0.1f : avionicsECRate;
+                if (HighLogic.LoadedSceneIsEditor)
+                {
+                    estimate += avionicsECRate + sasECRate + rcsECRate;
+                }
+                else if (isHibernating)
+                {
+                    estimate += avionicsECRate * 0.1f;
+                }
+                else
+                {
+                    estimate += avionicsECRate;
+
+                    if (vessel != null && vessel.ActionGroups[KSPActionGroup.SAS])
+                        estimate += sasECRate;
+
+                    if (vessel != null && vessel.ActionGroups[KSPActionGroup.RCS])
+                        estimate += rcsECRate;
+                }
             }
 
             dbsAvionicsECRate = estimate;
+        }
+
+        void RefreshAvionicsUI()
+        {
+            if (!HighLogic.LoadedSceneIsEditor)
+                return;
+
+            if (avionicsEnabled)
+            {
+                avionicsBaseECDisplay = avionicsECRate;
+                avionicsSASECDisplay = sasECRate;
+                avionicsRCSECDisplay = rcsECRate;
+            }
+            else
+            {
+                avionicsBaseECDisplay = 0f;
+                avionicsSASECDisplay = 0f;
+                avionicsRCSECDisplay = 0f;
+            }
         }
     }
 }
